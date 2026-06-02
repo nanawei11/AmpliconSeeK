@@ -11,17 +11,29 @@ AmpliconSeeK (ASK) is a Python toolkit for detecting and reconstructing amplifie
 - [Overview](#overview)
 - [Software dependencies](#software-dependencies)
 - [Installation](#installation)
+  - [How to install python and pre-required packages](#how-to-install-python-and-pre-required-packages)
 - [Input Data Preparation](#input-data-preparation)
+  - [Required Input Data](#required-input-data)
+  - [BAM](#bam)
+  - [Reference Annotation Data](#reference-annotation-data)
+  - [Known ecDNA Structure for Search](#known-ecdna-structure-for-search)
 - [Directory Structure](#directory-structure)
 - [De Novo ecDNA Detection](#de-novo-ecdna-detection)
+  - [How to run from bam file](#how-to-run-from-bam-file)
+  - [Output](#output)
+  - [How to prepare bam file](#how-to-prepare-bam-file)
 - [Targeted ecDNA Search](#targeted-ecdna-search)
+  - [What Search Mode Does](#what-search-mode-does)
+  - [Parameters](#parameters)
+  - [Output](#output-1)
 - [Output Files](#output-files)
 - [File Formats](#file-formats)
-- [Parameters](#parameters)
+  - [Circular Amplicon File](#circular-amplicon-file)
+  - [Circular Amplicon Statistics File](#circular-amplicon-statistics-file)
+  - [Breakpoint-Pair File](#breakpoint-pair-file)
+  - [JCS File](#jcs-file)
 - [Algorithm Overview](#algorithm-overview)
 - [Checkpointing and Modular Usage](#checkpointing-and-modular-usage)
-- [Troubleshooting](#troubleshooting)
-- [Build a Distribution Package](#build-a-distribution-package)
 - [License](#license)
 - [Contact](#contact)
 
@@ -32,9 +44,9 @@ Extrachromosomal DNA (ecDNA) is a dynamic form of oncogene amplification that co
 ASK provides two main workflows:
 
 
-| Workflow          | Command        | Description                                                                                             |
-| ----------------- | -------------- | ------------------------------------------------------------------------------------------------------- |
-| De novo detection | `ask`          | Detect amplified segments, breakpoint pairs, and candidate circular amplicons directly from a BAM file. |
+| Workflow          | Command      | Description                                                                                             |
+| ----------------- | ------------ | ------------------------------------------------------------------------------------------------------- |
+| De novo detection | `ask`        | Detect amplified segments, breakpoint pairs, and candidate circular amplicons directly from a BAM file. |
 | Targeted search   | `ask-search` | Search a new BAM file for evidence supporting a known ecDNA structure.                                 |
 
 ASK can be applied to sequencing assays with genomic alignment signals, including WGS, WES, ChIP-seq, MNase-seq, ATAC-seq, scATAC-seq, and target-capture sequencing.
@@ -74,7 +86,7 @@ Activate environment and install ASK:
 
 ```basha
 conda activate ask
-pip install ask
+pip install ask-ecdna
 ```
 
 Now, you are ready to run ASK:
@@ -91,14 +103,14 @@ ask-search --help
 ASK requires the following input data:
 
 
-| Data Type                 | Required for `ask` | Required for `ask-search` | Description                                             |
-| ------------------------- | ----------------- | -------------------------- | ------------------------------------------------------- |
-| BAM                       | Yes               | Yes                        | Sorted and indexed alignment file                       |
-| BAM index                 | Yes               | Yes                        | `.bai`  index file                                     |
-| Genome annotation         | Recommended       | Recommended                | Gene annotation BED12 file                              |
-| Cancer gene list          | Optional          | Optional                   | Cancer gene census file                                 |
-| Super-enhancer annotation | Optional          | Optional                   | BED file for SE annotation                              |
-| Known ecDNA structure     | No                | Yes                        | ASK circular table or manually prepared known structure |
+| Data Type                 | Required for`ask` | Required for`ask-search` | Description                                             |
+| ------------------------- | ----------------- | ------------------------ | ------------------------------------------------------- |
+| BAM                       | Yes               | Yes                      | Sorted and indexed alignment file                       |
+| BAM index                 | Yes               | Yes                      | `.bai`  index file                                     |
+| Genome annotation         | Recommended       | Recommended              | Gene annotation BED12 file                              |
+| Cancer gene list          | Optional          | Optional                 | Cancer gene census file                                 |
+| Super-enhancer annotation | Optional          | Optional                 | BED file for SE annotation                              |
+| Known ecDNA structure     | No                | Yes                      | ASK circular table or manually prepared known structure |
 
 ### BAM
 
@@ -368,10 +380,10 @@ ask_search/
 ## Output Files
 
 
-| File or Directory                        | Generated by          | Description                                                     |
-| ---------------------------------------- | --------------------- | --------------------------------------------------------------- |
-| `*_ask_amplicon_circular.tsv`        | `ask`, `ask-search` | Candidate circular amplicon/ecDNA structures                    |
-| `*_ask_amplicon_circular_stat.tsv`   | `ask`, `ask-search` | Summary statistics for circular amplicons                       |
+| File or Directory                        | Generated by        | Description                                                     |
+| ---------------------------------------- | ------------------- | --------------------------------------------------------------- |
+| `*_ask_amplicon_circular.tsv`            | `ask`, `ask-search` | Candidate circular amplicon/ecDNA structures                    |
+| `*_ask_amplicon_circular_stat.tsv`       | `ask`, `ask-search` | Summary statistics for circular amplicons                       |
 | `*_ask_amplicon_linear.tsv`              | `ask`, `ask-search` | Candidate linear amplicon structures                            |
 | `*_ask_amplified_segment.tsv`            | `ask`, `ask-search` | Amplified genomic segments inferred from copy number signal     |
 | `*_ask_breakpoint.tsv`                   | `ask`, `ask-search` | Candidate breakpoint positions                                  |
@@ -496,13 +508,13 @@ ASK can also be used modularly:
 | Use Case                                   | Suggested Entry Point                                                 |
 | ------------------------------------------ | --------------------------------------------------------------------- |
 | Start from BAM/CRAM                        | `ask`                                                                 |
-| Start from known ecDNA structure           | `ask-search`                                                        |
-| Compare one reference ecDNA across samples | Run `ask-search` once per query BAM                                  |
+| Start from known ecDNA structure           | `ask-search`                                                          |
+| Compare one reference ecDNA across samples | Run`ask-search` once per query BAM                                    |
 | Replot existing ASK outputs                | Use the generated circular, linear, copy number, and bin-count tables |
 
 ## License
 
-Please see the repository license file.
+ASK is released under the MIT License. See [LICENSE](https://github.com/nanawei11/AmpliconSeeK/blob/main/LICENSE) for details. 
 
 ## Contact
 
