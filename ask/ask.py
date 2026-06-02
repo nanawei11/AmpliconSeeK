@@ -6,6 +6,7 @@ import sys
 import pandas as pd
 import numpy as np
 import covbam
+import pysam
 import cndetect
 import bpdetect
 import bpjoint
@@ -18,14 +19,20 @@ import cbs
 import getbppair
 import time
 import logger
+import warnings
+
+warnings.filterwarnings('ignore')
 
 logg = logger.Logger()
+
+import numpy as np
+from memory_profiler import profile
 
 #------------------------------------------------------------------------------#
 def process_alignment(bamfile, gsfile = None, binsize = 10000,
                       mapq = 1, nmmax = 3,
                       mode = 'standard', sub_binsize = 1000,
-                      seg_robost_quant = 0.5, SA_with_nm = True):  # ******change
+                      seg_robost_quant = 0.5, SA_with_nm = True, downsample = 10):  # ******change
     """from bam file to amplified segments and breakpoint list
 
     Parameters
@@ -48,19 +55,47 @@ def process_alignment(bamfile, gsfile = None, binsize = 10000,
     """
     filename = os.path.splitext(os.path.basename(bamfile))
     logg.info(f'process_alignment: {filename}')
+        
+    ## get bamfile
+    bamfile_ = pysam.AlignmentFile(bamfile, 'r')
+    bamfile_init = covbam.prebamfile(bamfile_, downsample = downsample)
+    save_stat = os.path.splitext(bamfile)[0] + '_' + str(downsample) + '_covstat.tsv'
+    if bamfile_init.bamfile_filesize < 50:
+        bamfile_init.downsample_ratio = 1
+    else:
+        if os.path.exists(save_stat):
+            stats = []
+            with open(save_stat, 'r') as f:
+                for row in f:
+                    res = row.strip().split('\t')
+                    for j in res:
+                        stats.append(j)
+            bamfile_init.basic_stats = tuple(stats[1:])
+            bamfile_init.downsample_ratio = float(stats[0])
+        else:
+            bamfile_init.median_coverage(window_size = 10000)
+            with open(save_stat, 'w') as f:
+                f.write(f'{bamfile_init.downsample_ratio}\t') 
+                for i in bamfile_init.basic_stats:
+                    f.write(f'{i}\t')
+        bamfile_init.downsample_ratio = min(0.4, bamfile_init.downsample_ratio)
     # extract all clip reads
-    bp_all, reads_with_SA = covbam.clip_from_bam(bamfile, mapq = mapq, nmmax = nmmax, \
+    bp_all, reads_with_SA = covbam.clip_from_bam(bamfile_init, mapq = mapq, nmmax = nmmax, \
                                                  SA_with_nm = SA_with_nm) # ******change
 
+    if bamfile_init.downsample_ratio != 1:
+        ds_bamfile_pathname = covbam.downsampled_bam_path(
+            bamfile_init, bamfile_init.downsample_ratio)
+        pysam.index(ds_bamfile_pathname)
     # output bedgraph
     clip_bg = covbam.clip2bedgraph(bp_all)
 
     # get read counts in genomic bins
     if (mode == 'standard'):
-        bin_count = covbam.region_count(bamfile, gsfile,
+        bin_count = covbam.region_count(bamfile_init, gsfile,
             binsize = binsize, mapq = mapq, nmmax = nmmax)
     else:
-        bin_count = covbam.region_count_2pass(bamfile, gsfile,
+        bin_count = covbam.region_count_2pass(bamfile_init, gsfile,
             binsize = binsize, mapq = mapq, nmmax = nmmax,
             sub_binsize = sub_binsize, q = seg_robost_quant)
     print(f'possible bp_pair more than {len(reads_with_SA)}')
@@ -68,10 +103,14 @@ def process_alignment(bamfile, gsfile = None, binsize = 10000,
         bp_duo_bam =  getbppair.get_bp_pair(reads_with_SA)
     else:
         bp_duo_bam = pd.DataFrame()
-    
+
+    if bamfile_init.downsample_ratio != 1:
+        bamfile = ds_bamfile_pathname 
+
+
     logg.info(f'process_alignment finished')
     ## return
-    return bp_all, clip_bg, bin_count, bp_duo_bam
+    return bp_all, clip_bg, bin_count, bp_duo_bam, bamfile
 
 
 #------------------------------------------------------------------------------#
@@ -104,7 +143,10 @@ def detect_amplified_segment(bin_count, bp_all, blfile = None, genefile = None,
     # get the bias in binsize and remove bias from count data
     if (biasfile is not None):
         dfm = cndetect.get_bin_bias(bin_count, biasfile, binsize)
-        bin_norm = cndetect.norm_glm(dfm)
+        if not dfm.empty:
+            bin_norm = cndetect.norm_glm(dfm)
+        else:
+            bin_norm = bin_count
     else:
         bin_norm = bin_count
 
@@ -142,18 +184,18 @@ def detect_amplified_segment(bin_count, bp_all, blfile = None, genefile = None,
 
 
 #-----------------------------------------------------------------------------#
-def compute_depth(bin_norm, cn_amp, cn_seg):
-    table_df1 = bin_norm.agg({'Count': ['sum', 'mean'],
-                        'CN': ['sum', 'mean']}).T
-    table_df1.columns = ['bin_norm_sum','bin_norm_mean']
-    table_df2 = cn_amp.agg({'Count': ['sum', 'mean'],
-                            'CN': ['sum', 'mean']}).T
-    table_df2.columns = ['cn_amp_sum','cn_amp_mean']
-    table_df3 = cn_seg.agg({'Count': ['sum', 'mean'],
-                            'CN': ['sum', 'mean']}).T
-    table_df3.columns = ['cn_seg_sum','cn_seg_mean']
-    table_df = pd.concat([table_df1, table_df2, table_df3], axis=1)
-    return table_df
+# def compute_depth(bin_norm, cn_amp, cn_seg):
+#     table_df1 = bin_norm.agg({'Count': ['sum', 'mean'],
+#                         'CN': ['sum', 'mean']}).T
+#     table_df1.columns = ['bin_norm_sum','bin_norm_mean']
+#     table_df2 = cn_amp.agg({'Count': ['sum', 'mean'],
+#                             'CN': ['sum', 'mean']}).T
+#     table_df2.columns = ['cn_amp_sum','cn_amp_mean']
+#     table_df3 = cn_seg.agg({'Count': ['sum', 'mean'],
+#                             'CN': ['sum', 'mean']}).T
+#     table_df3.columns = ['cn_seg_sum','cn_seg_mean']
+#     table_df = pd.concat([table_df1, table_df2, table_df3], axis=1)
+#     return table_df
 
 #-----------------------------------------------------------------------------#
 def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
@@ -191,9 +233,12 @@ def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
 
     """
     logg.info(f'detect_bp_pair ....')
-    print(cn_amp.iloc[:,:6])
+    # print(cn_amp.iloc[:,:6])
     cn_amp = cn_amp[['Chrom', 'Start', 'End', 'CN', 'ClipLeft', 'ClipRight', 'Gene', 'CancerGene']]
-    
+    # bamfile_ = pysam.AlignmentFile(bamfile, 'r')
+    # bamfile_init = covbam.prebamfile(bamfile_, downsample=15)
+    # bamfile_init.downsample_ratio = downsample_ratio
+        
     if way == 'ask2' or way == 'both':
         # get bp pairs from bp_cand_stats
         if not bp_duo_bam.empty:                
@@ -278,9 +323,12 @@ def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
 def output_bppair_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
     """output breakpoint pair alignments
     """
-    if (circ_anno.empty == False):
+    if ( not circ_anno.empty ):
+        # bamfile_ = pysam.AlignmentFile(bamfile, 'r')
+        # bamfile_init = covbam.prebamfile(bamfile_)
+        # bamfile_init.downsample_ratio = downsample_ratio
         bpjoint.ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno)
-
+# @profile
 def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     '''
     search circ based DFS.
@@ -291,9 +339,9 @@ def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     # build ggraph from breakpoints
     gg.build_ggraph_from_bp(bp_pair, bp_fine, seg) 
 
-    # keep thr first top 4
+    # keep thr top 4 neighbors with the number count
     second_find = False
-    if (seg.shape[0] > 400) & (bp_pair.shape[0] > 400):
+    if len(gg.graph) > 400 and bp_pair.shape[0] > 400:
         print(f'seg.shape: {seg.shape}, bp_pair.shape{bp_pair.shape}')
         for i, v in gg.graph.items():
             if len(v) >= 4:
@@ -314,6 +362,16 @@ def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     # make interpretable circular amplicon
     circ_df = gg.make_amplicon_df(circ)
 
+    # add single circular amplicon
+    index = circ_df['AmpliconID'].unique().shape[0]
+    col_sel = ['Chrom', 'Start', 'End', 'Strand', 'SplitCount', 'CN']
+    single_circ = pd.DataFrame(gg.single_segment_loop, columns=col_sel)
+    single_circ['AmpliconID'] = 'circ'
+    unique_single_circ = pd.concat([circ_df[~circ_df.duplicated(subset='AmpliconID', keep=False)], single_circ],axis=0).drop_duplicates(col_sel)
+    circ_df = pd.concat([circ_df, unique_single_circ[unique_single_circ['AmpliconID'] == 'circ']], axis=0)
+    adj_index = circ_df['AmpliconID'] == 'circ'
+    circ_df['AmpliconID'].loc[adj_index] = ['circ_' + str(i) for i in range(index, index + sum(adj_index))]
+
     # annotate circular amplicon
     if (genefile is not None):
         circ_anno = circ_df.assign(
@@ -326,14 +384,14 @@ def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     if (sefile is not None):
         circ_anno = grange.GRange.map_senchancer(circ_anno, sefile)
     return gg, all_circ_path, circ_anno, second_find
-
+# @profile
 #------------------------------------------------------------------------------#
 def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm, 
                        genefile = None, sefile = None, cgfile = None, 
                        min_junc_cnt = 10, bpp_min_dist = 200,
                        segment_restrict = True, subseg = True, rm_amp_df = False,
                        first_filter = False, second_filter = False, third_filter = False, knn = 3,
-                       saveseg = None, savebp_bp_pair = None):  # ******change
+                       saveseg = None, savebp_bp_pair = None, EGA = None):  
     """construct amplicon structure
 
     Parameters
@@ -367,15 +425,18 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
     cn_amp = cn_amp[['Chrom', 'Start', 'End', 'CN', 'ClipLeft', 'ClipRight', 'Gene', 'CancerGene']]
 
     print(f'filter bp duo: bp_duo.shape {bp_duo.shape}')
-    
+
     # estimate the thred for bp_pair
-    if bp_duo.shape[0] >= 1000:
+    if bp_duo.shape[0] >= 500:
         _, min_junc_cnt, _, _ = bppair.estimaed_thred(bp_duo)
     else:
-        min_junc_cnt = 2
+        min_junc_cnt = 5 
+
+    # min_junc_cnt = min(min_junc_cnt,5)  # CellineDrug
+    
     # remove breakpoint pairs in a short distance or have few split reads
     bp_pair = bppair.bp_pair_filter(bp_duo, bpp_min_dist, min_junc_cnt)
-    print(f'filter bp_pair by thred: {min_junc_cnt}: bp_pair.shape {bp_duo.shape}')
+    print(f'filter bp_pair by thred: {min_junc_cnt}: bp_pair.shape {bp_pair.shape}')
     # if subseg and bpp_max_dist:
     #     print(f'only subseg is {subseg} == True')
     #     ind = (bp_pair['Chrom1']==bp_pair['Chrom2']) & (np.abs(bp_pair['Coord2'] - bp_pair['Coord1']) > bpp_max_dist)
@@ -400,19 +461,21 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
 
     # compute fretures of  circs and  take the better circs based on scores
     if not circ_anno.empty:
+
         circ_score = ggraph.add_stats_circ(circ_anno, bin_norm, binsize = 10000)
     
-        result = (circ_score.groupby(['Chrom','Start','End'])
-                    .apply(lambda x: x.nlargest(1, 'Score'))
-                    .reset_index(drop=True))
-        select_circ = result['AmpliconID'][(result['Score'] >= result['Score'].quantile(0.85)) & (result['F1'] >= 1)]
-        print(f'select_circ: {select_circ}')
-
         # search the circ again on specfic chroms 
+
         circ_new = pd.DataFrame()
         if second_find:
-            cand_serch_circ = circ_score[circ_score['AmpliconID'].isin(select_circ)][['AmpliconID', 'Chrom', 'Start', 'End']]
-            select_chrom = cand_serch_circ['Chrom'].tolist()
+            result = (circ_score.groupby(['Chrom1','Start','End']).apply(lambda x: x.nlargest(1, 'Score')).reset_index(drop=True))
+
+            select_circ = result['AmpliconID'][(result['Score'] >= result['Score'].quantile(0.85))] #  & (result['Score'] >= 3
+            print(f'select_circ: {select_circ}')
+
+
+            cand_serch_circ = circ_score[circ_score['AmpliconID'].isin(select_circ)][['AmpliconID', 'Chrom1', 'Start', 'End']]
+            select_chrom = cand_serch_circ['Chrom1'].tolist()
             
             bp_pair1 = bp_pair[(bp_pair['Chrom1'].isin(select_chrom)) & (bp_pair['Chrom2'].isin(select_chrom))]
             seg1 = seg[seg['Chrom'].isin(select_chrom)]
@@ -577,3 +640,239 @@ def plot_amplicon(circ_anno, line_anno = None, cn_amp = None,
             # make plot
             trackplot.plot_amp(rois, segs, links, bgs, beds, fig_out,
                                fig_width, fontsize)
+
+
+if __name__ == '__main__':
+    datapath = '/Users/weina/Desktop/My_data/Allproject/ecDNA/ask-main/data'
+    resultpath = '/cluster/home/WeiNa/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
+    # resultpath = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/Newresult/ask2_chr78_nm1_se0/ask2_chr78'
+    resfigpath = '/cluster/home/WeiNa/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
+    from pathlib import Path
+    import os
+    import time
+    from pathlib import Path
+    import pickle
+    #------------------------------------------------------------------------#
+    #@ create base dir of output files
+    Path(os.path.dirname(resultpath)).mkdir(parents=True, exist_ok=True)
+
+    #@ create base dir of plot files
+    Path(resfigpath).mkdir(parents=True, exist_ok=True)
+
+    #@ set output file names
+    output_stats     = resultpath + '_ask_stats.tsv'
+    output_cnamp     = resultpath + '_ask_amplified_segment.tsv'
+    output_cnseg     = resultpath + '_ask_cn_segmentation.tsv'
+
+    output_bpcand    = resultpath + '_ask_breakpoint.tsv'
+    output_bpduo     = resultpath + '_ask_breakpoint_pair_raw.tsv'
+    output_bppair    = resultpath + '_ask_breakpoint_pair.tsv'
+    
+    output_circ      = resultpath + '_ask_amplicon_circular.tsv'
+    output_circ_stat = resultpath + '_ask_amplicon_circular_stat.tsv'
+    output_line      = resultpath + '_ask_amplicon_linear.tsv'
+    output_seg      = resultpath + '_ask_amplicon_seg.tsv'
+    output_clip      = resultpath + '_ask_clip_count.bedgraph'
+    output_bincnt    = resultpath + '_ask_bin_count.tsv'
+    output_binnorm   = resultpath + '_ask_bin_count_norm.tsv'
+    output_align     = resultpath + '_ask_breakpoint_pair_alignment.tsv'
+
+    output_pdat_1    = resultpath + '_ask_step1.pdat'
+    output_pdat_2    = resultpath + '_ask_step2.pdat'
+    output_pdat_3    = resultpath + '_ask_step3.pdat'
+    output_pdat_4    = resultpath + '_ask_step4.pdat'
+
+    
+    #-------------------------------------------------------------------------#
+    #-------------------------------------------------------------------------#
+
+    # blacklist file
+    blfile = os.path.join(datapath,  'hg38_blacklist.bed')
+
+    # gene annotation file
+    genefile = os.path.join(
+        datapath, 'hg38_refgene.bed12.gz')
+
+    # genome size file (currently not in use)
+    gsfile = os.path.join(
+        datapath, 'hg38.genome')
+
+    # cancer gene file
+    cgfile = os.path.join(
+        datapath, 'Census_all_20200624_14_22_39.tsv')
+
+    bamfile = os.path.join(
+        datapath, 'test_sort.bam')
+
+    # bias file (GC + mappability)
+    biasfile = os.path.join(
+         datapath,
+        'hg38_bias.bed.gz')
+
+    binsize = 10000
+    mapq = 20
+    nmmax = 1
+    segmode = 'standard'
+    sub_binsize = 1000
+    segquant = 0.5
+    mincn = 5
+    bpcount = 5
+    juncread = 5
+    max_n_breakpoint = 500
+    cleanbp_cutoff = 0.2
+    sub_binsize = 1000
+    only_keep_cleanbp = True
+
+    startTime = time.time()
+    #--------------------------------------------------------------------------#
+    # step 1 : process bam file to generate bin counts and clip reads
+    #--------------------------------------------------------------------------#
+    # run module
+    bp_all, clip_bg, bin_count, reads_with_SA = process_alignment(
+        bamfile, gsfile = gsfile, binsize = binsize,
+        mapq = mapq, nmmax = nmmax,
+        mode = segmode, sub_binsize = sub_binsize,
+        seg_robost_quant = segquant, SA_with_nm=True)
+
+       
+    # output results
+    bin_count.to_csv(output_bincnt, sep='\t', index=False)
+    clip_bg.to_csv(output_clip, sep='\t', index=False, header=False)
+
+    # save pdat
+    pdat = [bp_all, clip_bg, bin_count]
+    with open(output_pdat_1, "wb") as f:
+        pickle.dump(pdat, f)
+
+    # output log
+    print('alignment process - done \
+        - {0:0.1f} seconds\n'.format(time.time() - startTime))
+
+    with open('GBM39_chr78_ask_0927/GBM39_chr78_ask_ask_step1.pdat', 'rb') as f:
+        dat = pickle.load(f)
+    bp_all, clip_bg, bin_count = dat[0],dat[1],dat[2]
+    #--------------------------------------------------------------------------#
+    # step 2 : identify amplified segments
+    #--------------------------------------------------------------------------#
+    # run module
+    cn_amp, cn_seg, bin_norm = \
+        detect_amplified_segment(
+            bin_count, bp_all,
+            blfile, genefile, gsfile, cgfile,
+            biasfile = biasfile,
+            binsize = binsize, min_cn = mincn)
+
+    # output results
+    cn_amp.to_csv(output_cnamp, sep='\t', index=False)
+    cn_seg.to_csv(output_cnseg, sep='\t', index=False)
+    bin_norm.to_csv(output_binnorm, sep='\t', index=False)
+
+    # save pdat
+    pdat = [cn_amp, cn_seg, bin_norm]
+    with open(output_pdat_2, "wb") as f:
+        pickle.dump(pdat, f)
+
+    # output log
+    print('detect amplified segments - done \
+        - {0:0.1f} seconds\n'.format(time.time() - startTime))
+
+    with open('GBM39_chr78_ask_0927/GBM39_chr78_ask_ask_step2.pdat', 'rb') as f:
+        dat = pickle.load(f)
+    cn_amp, cn_seg, bin_norm = dat[0],dat[1],dat[2]
+
+    #--------------------------------------------------------------------------#
+    # step 3 : identify breakpoint pairs
+    #--------------------------------------------------------------------------#
+    # run module
+    bp_duo, bp_cand_stats = detect_bp_pair(
+        bamfile,reads_with_SA, cn_amp, blfile,
+        binsize = binsize, bp_min_clip = bpcount,
+        mapq = mapq, nmmax = nmmax,
+        max_n_bp = max_n_breakpoint,
+        clean_bp_perc = cleanbp_cutoff,
+        only_keep_clean_bp = only_keep_cleanbp, 
+        bp_pair_info_file = output_align,
+        way = 'ask')
+
+    # output results
+    # bp_cand_all.to_csv(output_bpcand, sep='\t', index=False)
+    bp_duo.to_csv(output_bpduo, sep='\t', index=False)
+
+    # save pdat
+    pdat = [bp_duo, bp_cand_stats]
+    with open('both_chr78_ask_step3.pdat', "wb") as f:
+        pickle.dump(pdat, f)
+
+    # output log
+    print('detect breakpoint pairs - done \
+        - {0:0.1f} seconds\n'.format(time.time() - startTime))
+
+
+    #--------------------------------------------------------------------------#
+    # step 4 : construct amplicons
+    #--------------------------------------------------------------------------#
+    # run module
+    circ_anno, line_anno, bp_pair, seg = construct_amplicon(
+        bp_duo, bp_cand_stats, cn_amp, bin_norm, genefile, cgfile,
+        segment_restrict = False,
+        min_junc_cnt = juncread)
+    
+
+    # output results
+    circ_anno.to_csv(output_circ, sep='\t', index=False)
+    line_anno.to_csv(output_line, sep='\t', index=False)
+    bp_pair.to_csv(output_bppair, sep='\t', index=False)
+    seg.to_csv(output_seg, sep='\t', index=False)
+    ## output breakpoint pair alignment for all bp in bp_duo
+    # output_bppair_alignment(bp_duo, bamfile, output_align)
+
+    # output breakpoint pair alignment
+    # output_bppair_alignment(bp_pair, bamfile, output_align)
+
+    # save pdat
+    pdat = [circ_anno, line_anno, bp_pair, seg]
+    with open(output_pdat_4, "wb") as f:
+        pickle.dump(pdat, f)
+
+    # output log
+    print('construct amplicons - done \
+        - {0:0.1f} seconds\n'.format(time.time() - startTime))
+
+    #-------------------------------------------------------------------------#
+    # step 4': get stats
+    #-------------------------------------------------------------------------#
+    # circ_stat = score_circ(circ_anno, bin_norm, binsize = 10000)
+    # circ_stat.to_csv(output_circ_stat, sep='\t', index=False)
+
+    #--------------------------------------------------------------------------#
+    # step 5 : plot amplicons
+    #--------------------------------------------------------------------------#
+    # run module
+    outfig = resfigpath
+    try:
+        plot_amplicon(circ_anno, line_anno, cn_amp, genefile,
+                          bin_norm, binsize = binsize,
+                          fig_dir = outfig, plot_n = 5,
+                          fig_width = 15, fontsize = 12, ext = 0.3)
+        # output log
+        print('plot amplicons - done \
+            - {0:0.1f} seconds\n'.format(time.time() - startTime))
+    except:
+        print('plot amplicons - error \
+            - {0:0.1f} seconds\n'.format(time.time() - startTime))
+
+
+    #--------------------------------------------------------------------------#
+    # output stats
+    #--------------------------------------------------------------------------#
+    # output statistics table
+    with open(output_stats, 'w') as f:
+        f.write('# of amplified segments: ' + str(len(cn_amp)) + '\n')
+        f.write('# of candidate breakpoints: ' + str(len(bp_cand_stats)) + '\n')
+        f.write('# of breakpoint pairs: ' + str(len(bp_duo)) + '\n')
+        f.write('# of circular amplicons: '
+            + str(circ_anno['AmpliconID'].nunique()) + '\n')
+        f.write('# of linear amplicons: '
+            + str(line_anno['AmpliconID'].nunique()) + '\n')
+
+    print('All - done - {} seconds\n'.format(time.time() - startTime))

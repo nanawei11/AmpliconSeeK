@@ -320,6 +320,7 @@ def bp_seq_depth(bp_cand_df, bamfile, perc = 0.2, mapq = 20, nmmax = 1, isdf =  
     """    
     # bp_duo is bp_cand from bp_all
     bp_cand_df_ = bp_cand_df.drop_duplicates(['Chrom', 'Coord', 'Clip'])
+    
     with pysam.AlignmentFile(bamfile, "rb") as bamf:
         op = []
         for index, row in bp_cand_df_.iterrows():  # here is can change

@@ -5,8 +5,8 @@
 import pysam
 import numpy as np
 import pandas as pd
-import re
 import os
+import re
 from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 from itertools import combinations
@@ -19,18 +19,21 @@ import logger
 
 logg = logger.Logger()
 #------------------------------------------------------------------------------#
-def check_read_clip(read, clip_type = 'soft_left'):
+def check_read_clip(read, clip_type = 'soft_left', seq = False):
     """
     true if the read is the clip read
     """
-    tf = check_read(read)
+    if seq:
+        tf = check_read(read, mapq=0)
+    else:
+        tf = check_read(read)
 
     if (tf):
         clip_tf = False
         if (clip_type == 'soft_left' and read.cigartuples is not None):
-            clip_tf = read.cigartuples[0][0] == 4
+            clip_tf = read.cigartuples[0][0] == 4 or (read.cigartuples[-1][0] == 5 and seq) or (read.cigartuples[0][0] == 5 and seq)
         elif (clip_type == 'soft_right' and read.cigartuples is not None):
-            clip_tf = read.cigartuples[-1][0] == 4
+            clip_tf = read.cigartuples[-1][0] == 4 or (read.cigartuples[-1][0] == 5 and seq)
         tf = tf and clip_tf
 
     return tf
@@ -182,7 +185,6 @@ def left_clip(bamfile, l, seq_len):   # ************change
     
     l_clipped_name = [read.query_name for read in l_read]
 
-#     print([read.query_sequence for read in l_read])
     return [l_seq, l_clipped, l_clipped_name]
 
 #------------------------------------------------------------------------------#
@@ -195,7 +197,7 @@ def right_clip(bamfile, r, seq_len):   # ************change
             and check_read_clip(read, 'soft_right')]
 
     # get the sequence bases within the breakpoint
-    start =  r[1]-seq_len+1
+    start =  r[1] - seq_len + 1
     if  start < 0:
         start = 0
     r_seq = get_consensus_sequence(bamfile, r[0], start, r[1]+1)
@@ -205,7 +207,6 @@ def right_clip(bamfile, r, seq_len):   # ************change
                  for read in r_read]
     r_clipped_name = [read.query_name for read in r_read]
 
-#     print([read.query_sequence for read in r_read])
     return [r_seq, r_clipped, r_clipped_name]
 
 #------------------------------------------------------------------------------#
@@ -304,7 +305,6 @@ def fuzzy_match(_clipped, _seq, num = 0, offset = 0, min_nt = 2, error_rate = 0.
         _sub_seq = _seq[match_start:]
         m = [levenshtein_distance(_x, _sub_seq)
              for _x in _clipped if (len(_x) >= min_nt)]
-    # print(m)
     if num > 0:
         return (match_start, sum(np.array(m) <= error_rate) + num)
     else:
@@ -338,7 +338,6 @@ def levenshtein_distance(str1, str2, rate = True, _sub = 1, _del = 1, _ins = 1):
                   dist[row - 1][col] + _del, # deletion
                 dist[row][col - 1] + _ins, # insertion
             )
-    # print(dist)
     if (rate):
         return dist[row].min()/len(str1)
     else:
@@ -357,7 +356,6 @@ def combinations_bp(bp_cand_df):
                 bpp_ = (bp_cand_list[i], bp_cand_list[j]) 
                 if bpp_ not in bpp_cand_list:
                     bpp_cand_list.append(bpp_)
-            print(len(bpp_cand_list))
         elif i == 2:
             for chrom in set(df['Chrom']):
                 bp_cand_list = [x[1:4] for x in df[df['Chrom'] == chrom]\
@@ -366,7 +364,6 @@ def combinations_bp(bp_cand_df):
                     bpp_ = (bp_cand_list[i],  bp_cand_list[j]) 
                     if bpp_ not in bpp_cand_list:
                         bpp_cand_list.append(bpp_)
-            print(len(bpp_cand_list))
     return bpp_cand_list
     
 
@@ -387,7 +384,7 @@ def get_breakpoint_duo(bamfile, bp_cand_df, \
    
     # get all bp cand
     bplist = [x[1:4] for x in bp_cand_df.drop_duplicates(['Chrom', 'Coord', 'Clip']).itertuples()]
-    print(set(bp_cand_df['Group']))        
+  
     if len(set(bp_cand_df['Group'])) > 1:
         # find the breakpoint reads sequence
         bpass = {}
@@ -532,7 +529,7 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
             final_result = []
             # cumulative_count = 0
             df = df.sort_values(by = ind)
-            print(df.reset_index(drop=True).iloc[:,:7])
+ 
             dist1 = dist
             for index, row in df.reset_index(drop=True).iterrows():
                 if index == 0:
@@ -541,7 +538,6 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
                     t = 0
                 else:
                     distance = row[ind] - prev_row[ind]
-                    # 当一堆较近的点合并之后, 遇到新的需要合并的，cumulative_count需要重制
                     if (distance > dist) and  (distance > dist1 ) and (t != 0):
                         t = 0
                         
@@ -559,69 +555,11 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
                         dist1 = dist
             final_result.append(prev_row)
             bp_duo_new.append(pd.DataFrame(final_result))
-            print(pd.DataFrame(final_result).iloc[:,:7])
         else:
             bp_duo_new.append(i[1])
 
     return pd.concat(bp_duo_new)
 
-# def remove_duplicates(bp_duo, dist = 100, col = 1):
-#     '''
-#     merge the two bp pairs with the same start when two have the closer end.
-#     bp_duo: data frame of all bp pairs
-#     dist: merge only the distance of two ends less than dist
-#     '''
-#     bp_duo_new = []
-#     if col == 1:
-#         groupby = ['Chrom1','Coord1', 'Clip1']
-#         ind = 'Coord2'
-#     else:
-#         groupby = ['Chrom2','Coord2', 'Clip2']
-#         ind = 'Coord1'
-#     for i in bp_duo.groupby(groupby):
-#         df = i[1].sort_values(ind)
-#         # only do when has nearly end
-#         if df.shape[0] > 1 and (np.diff(df[ind]) < dist).any():
-#             final_result = []
-#             cumulative_count = 0
-#             df = df.sort_values(by = ind)
-#             print(df.reset_index(drop=True).iloc[:,:7])
-#             dist1 = dist
-#             for index, row in df.reset_index(drop=True).iterrows():
-#                 if index == 0:
-#                     cumulative_count = row['Count']
-#                     prev_row = row
-#                     t = 0
-#                 else:
-#                     distance = row[ind] - prev_row[ind]
-#                     # 当一堆较近的点合并之后, 遇到新的需要合并的，cumulative_count需要重制
-#                     if (distance > dist) and  (distance > dist1 ) and (t != 0):
-#                         t = 0
-                        
-#                     if distance <= dist or (distance <= dist1 and dist1 != dist):
-#                         t += 1
-#                         if t == 1:
-#                             cumulative_count = prev_row['Count']
-#                         cumulative_count += row['Count']
-#                         # keep the row with largest count 
-#                         if prev_row['Count'] >= row['Count']:   
-#                             prev_row['Count'] = cumulative_count
-#                             dist1 = dist + distance
-#                         else:
-#                             prev_row = row
-#                             prev_row['Count'] = cumulative_count
-#                             dist1 = dist
-#                     else:
-#                         final_result.append(prev_row)
-#                         prev_row = row
-#                         dist1 = dist
-#             final_result.append(prev_row)
-#             bp_duo_new.append(pd.DataFrame(final_result))
-#             print(pd.DataFrame(final_result).iloc[:,:7])
-#         else:
-#             bp_duo_new.append(i[1])
-
-#     return pd.concat(bp_duo_new)
 
 
 #------------------------------------------------------------------------------#
@@ -640,7 +578,6 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
     # # example of element of bplist： ('chr7', 54817063, 'L')
     # bplist = [x[1:4] for x in bp_cand_df_sorted.itertuples()]
     if bp_duo_bam.shape[0] > 10000:
-        print(f'bp_duo_bam.shape {bp_duo_bam.shape[0]}, using multi_process')
         multi_process = True
         num_cores = 20
 
@@ -657,7 +594,6 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
         #### bpp_cand_list is the bp_cand_df
         bp_cand_df_sorted = bp_cand_df.sort_values(['Chrom', 'Coord', 'Clip'])
         bpduo = get_breakpoint_duo(bamfile, bp_cand_df_sorted, seq_len, seed_len, min_nt, rm_bpp = rm_bpp)  # consuming time 
-        print(f'bp_duo by ask.shape{len(bpduo)}')
     else:
         bpduo = []
 
@@ -666,24 +602,22 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
     # to ensure the reads are fully coverred in the breakend
     def run_join_breakpoint(bamfile, match_method, type, t1, row):
         if type == 1:
-            logg.info(f'bpduo: {row[0:6]} of {len(t1)}')
+            # logg.info(f'bpduo: {row[0:6]} of {len(t1)}')
             bp_count = tuple(join_breakpoint(bamfile, row[0:3], row[3:6], rm_clipped_name = None, \
                     offset = row[7], match_method = match_method))
             if bp_count[0][1] > 0 and bp_count[1][1] > 0 and bp_count[0][0] == bp_count[1][0]:
                 sum_count = bp_count[0][1] + bp_count[1][1]
-                # print(list(row[0:6] + (sum_count,) + row[8:10]))
                 t1.append(list(row[0:6] + (sum_count,) + row[7:]))
             return t1
         else: 
-            logg.info(f'bpduobam: {row[1:7]} of {len(t1)}')
-            print(row[1:7])
+            # logg.info(f'bpduobam: {row[1:7]} of {len(t1)}')
+       
             bp_count = join_breakpoint(bamfile, row[1:4], row[4:7], rm_clipped_name = row[-1], \
                     offset = row[8], match_method = match_method)
             if bp_count[0][0] == bp_count[1][0]:
                 sum_count = bp_count[0][1] + bp_count[1][1]
                 if sum_count < row[7]:  # raw count bp_pair
                     sum_count = row[7]
-                # print(list(row[1:4] + row[4:7] + (sum_count,) + row[8:10]))
                 t1.append(list(row[1:4] + row[4:7] + (sum_count,) + row[8:10]))   
             return t1
     
@@ -717,7 +651,6 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
                 "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq']
 
     bp_pair_df = pd.DataFrame(t1, columns = colnames).reset_index(drop=True)
-    print(f'bp pair df shape: {bp_pair_df.shape}')
     if bp_pair_df.shape[0] > 1:
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 1)
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 2)
@@ -732,7 +665,7 @@ def left_clip_seq(bamfile, l, seq_len = 100):
     with pysam.AlignmentFile(bamfile, "rb") as bamf:
         l_read = [
             read for read in bamf.fetch(l[0], l[1], l[1]+1) \
-            if check_read_clip(read, 'soft_left') \
+            if check_read_clip(read, 'soft_left', seq = True) \
             and read.reference_start == l[1]]
 
     # get the clipped reads of the breakpoint
@@ -753,7 +686,7 @@ def right_clip_seq(bamfile, r):
     with pysam.AlignmentFile(bamfile, "rb") as bamf:
         r_read = [
             read for read in bamf.fetch(r[0], r[1], r[1]+1) \
-            if check_read_clip(read, 'soft_right') \
+            if check_read_clip(read, 'soft_right', seq = True) \
             and read.reference_end == r[1]+1]
 
     # get the clipped reads of the breakpoint
@@ -803,7 +736,10 @@ def get_alignment(bamfile, a, b, offset = 0):
                  for z in b_seq]
         b_seq = [' ' * (len(a_seq[0]) + offset - b_seq[0].count(' '))
                  + read for read in b_seq]
-
+    # Correct number of space    
+    tmp = len(b_seq[0]) - len(b_seq[0].strip())  - (len(a_seq[0]) + offset) 
+    if tmp > 0:
+        b_seq = [bseq[tmp:] for bseq in b_seq]
     return [a_seq[0]] + [b_seq[0]] + [] + a_seq[1:] + b_seq[1:]
 
 #------------------------------------------------------------------------------#
@@ -813,52 +749,51 @@ def ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
     if not circ_anno.empty:
         AmpliconIDs = circ_anno['AmpliconID'].unique()
         for i in AmpliconIDs:
-            print(i)
-            output_align = output_align_dir + i + '.tsv'
+            output_align = output_align_dir + '/' + i + '.tsv'
             circ_anno_sub = circ_anno[circ_anno['AmpliconID'] == i]
-
-            mask = (
-                    bp_pair['Chrom1'].isin(circ_anno_sub['Chrom']) & bp_pair['Coord1'].isin(circ_anno_sub['Start']) |
-                    bp_pair['Chrom1'].isin(circ_anno_sub['Chrom']) & bp_pair['Coord1'].isin(circ_anno_sub['End']) |
-                    bp_pair['Chrom2'].isin(circ_anno_sub['Chrom']) & bp_pair['Coord2'].isin(circ_anno_sub['Start']) |
-                    bp_pair['Chrom2'].isin(circ_anno_sub['Chrom']) & bp_pair['Coord2'].isin(circ_anno_sub['End']) 
-                    )
-        
-            bp_pair_sub = bp_pair[mask]
+            # get the bp_pair within  circ_anno
             if not os.path.exists(output_align_dir):
                 os.makedirs(output_align_dir)
-
+            ## get breakpoints 
+            circ_anno_sub_copy = circ_anno_sub.copy()
+            circ_anno_sub_copy.loc[circ_anno_sub_copy['Strand'] == '-', ['Start', 'End']] = circ_anno_sub_copy.loc[circ_anno_sub_copy['Strand'] == '-', ['End', 'Start']].values
             with open(output_align, 'w') as f:
-                for row in bp_pair_sub.itertuples():
-                    if (row[9] != 'PE_Support'):
-                        a = row[1:4]
-                        b = row[4:7]
-                        offset = row[8]
-                        alignment = get_alignment(bamfile, a, b, offset)
+                for id in range(len(circ_anno_sub_copy)):
+                    current_row = circ_anno_sub_copy.iloc[id]
+                    next_row = circ_anno_sub_copy.iloc[(id + 1) % len(circ_anno_sub_copy)]  #
+                    if current_row[2] < next_row[1]:
+                        index = ((bp_pair['Coord1'] == current_row[2]) & (bp_pair['Chrom1'] == current_row[0])) & \
+                            ((bp_pair['Coord2'] == next_row[1]) & (bp_pair['Chrom2'] == next_row[0]))
+                    else:
+                        index = ((bp_pair['Coord2'] == current_row[2]) & (bp_pair['Chrom2'] == current_row[0])) & \
+                            ((bp_pair['Coord1'] == next_row[1]) & (bp_pair['Chrom1'] == next_row[0]))
+                    bp_pair_sub = bp_pair[index]
+                
+                    for row in bp_pair_sub.itertuples():
+                        if (row[9] != 'PE_Support'):
+                            a = row[1:4]
+                            b = row[4:7]
+                            offset = row[8]
+                            output_align_tmp_file = output_align_dir + '/' +  a[0] + str(a[1]) + a[2] + b[0] +  str(b[1]) + b[2] +'_tmp.tsv'
+                            if not os.path.exists(output_align_tmp_file):
+                                try:
+                                    alignment = get_alignment(bamfile, a, b, offset)
+                                    with open(output_align_tmp_file, 'w') as fin:
+                                        fin.write('>' + '\t'.join(map(str, list(row[1:9]))) + "\n")
+                                        for read in alignment:
+                                            fin.write("%s\n" % read)
+                                        fin.write("\n\n")
+                                    with open(output_align_tmp_file, 'r') as fin:
+                                        f.write(fin.read())
+                                except:
+                                    print(f'warings: {row}')
+                            else:
+                                with open(output_align_tmp_file, 'r') as source_file:
+                                    f.write(source_file.read())
+        cmd = 'rm -rf ' + output_align_dir + '/' + '*' + '_tmp.tsv'
+        os.system(cmd)         
 
-                        f.write('>' + '\t'.join(map(str, list(row[1:9]))) + "\n")
-                        for read in alignment:
-                            f.write("%s\n" % read)
-                        f.write("\n\n")
-
-
-# def ouput_alignment(bp_pair, bamfile, output_align):
-#     """output alignment on pairs of breakpoints
-#     """
-#     f = open(output_align, 'w')
-#     for row in bp_pair.itertuples():
-#         if (row[9] != 'PE_Support'):
-#             a = row[1:4]
-#             b = row[4:7]
-#             offset = row[8]
-#             alignment = get_alignment(bamfile, a, b, offset)
-
-#             f.write('>' + '\t'.join(map(str, list(row[1:9]))) + "\n")
-#             for read in alignment:
-#                 f.write("%s\n" % read)
-#             f.write("\n\n")
-#     f.close()
-
+        
 
 #------------------------------------------------------------------------------#
 # search for breakpoint pairs candidates from improper paired reads

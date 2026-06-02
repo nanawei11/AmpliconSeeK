@@ -2,15 +2,21 @@
 # GRange class to analyze genomic intervels
 ################################################################################
 import gzip
+from collections import Counter, defaultdict
 from itertools import compress
+import numpy as np
 import pandas as pd
+import misc
 
+#------------------------------------------------------------------------------#
+# GGraph class: search for circular amplicons
 #------------------------------------------------------------------------------#
 class GRange:
     """
     store and analyze genomic intervels
     """
 
+    # all nodes must be 0, 1, 2, 3, 4,...
     #--------------------------------------------------------------------------#
     def __init__(self, genomic_range, type = 'grange'):
         self.gr = self.create_gr(genomic_range, type)

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import grange
 import gzip
+plt.rcParams['pdf.fonttype'] = 42
 
 #------------------------------------------------------------------------------#
 # processing functions
@@ -36,11 +37,38 @@ def prepare_plot(amp_df, gbeds, bincnt, binsize = 10000, ext = 0.3,
 
     # get rois
     rois = get_rois(amp_df, binsize * 10, ext)  #
+    # print(f"amp_df_:{list(filter(None, amp_df['Gene']))}")
+
+    # print("Filtered data:")
+    filtered_genes = list(filter(None, amp_df['Gene']))
+    # print(filtered_genes)
+
+    # 2. 安全的分割和处理
+    def safe_split(gene_str):
+        if isinstance(gene_str, str):  # 确保是字符串
+            return gene_str.split('; ')
+        return []
+
+    # 3. 修改后的代码
+    try:
+        genes = set()
+        for g in filtered_genes:
+            if isinstance(g, str):  # 只处理字符串类型
+                genes.update(safe_split(g))
+        # print("Processed genes:", genes)
+        
+        # 4. 处理beds
+        beds = [g for g in gbeds if (g.name in genes)]
+        
+    except Exception as e:
+        print("Error occurred:", e)
+        print("Problem gene:", g)
+        print("Type:", type(g))
 
     # get gene annotation
-    genes = set([x for g in list(filter(None, amp_df['Gene']))
-        for x in g.split('; ')])
-    beds = [g for g in gbeds if (g.name in genes)]
+    # genes = set([x for g in list(filter(None, amp_df['Gene']))
+    #     for x in g.split('; ')])
+    # beds = [g for g in gbeds if (g.name in genes)]
 
     # get segments
     if (genre == 'cn'):

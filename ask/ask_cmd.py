@@ -6,6 +6,7 @@ from pathlib import Path
 import pickle
 import pandas as pd
 import ask
+from ask_utils import plot_ask_amplicons, prepare_ask_output_paths, resolve_ask_annotation_files, write_ask_stats
 
 
 #------------------------------------------------------------------------------#
@@ -34,6 +35,10 @@ def get_args():
         help="minimal mapping quality (include)")
     parser.add_argument('-l', '--nmmax', type=int, default=1,
         help="maximal number of mismatches (include)")
+    
+    parser.add_argument('-p', '--downsample', type=int, default=10,
+        help="the number of coverage downsampled (default by 10x)")
+
 
     parser.add_argument('-n', '--bpcount', type=int, default=5,
         help="# clip reads for a breakpoint to include in analysis")
@@ -56,6 +61,8 @@ def get_args():
                      used for data with coverage bias,
                      such as ChIP-seq test, ATAC-seq, Exome-seq.
             ''')
+    parser.add_argument('--ega', action='store_true', required=False,
+        help="infer the sub segment on amp")
     parser.add_argument('-s', '--sub-binsize', type=int, default=1000,
         help="sub bin size, for bias segmentation mode only")
     parser.add_argument('-q', '--segquant', default=0.5,
@@ -71,7 +78,7 @@ def get_args():
         help="remove non CleanBP for segmentation")
 
     parser.add_argument('--SA_with_nm', action='store_true', required=False,
-        help="only consider the reads with SA nm greater than 1")
+        help="use NM mismatch values in SA tags when filtering supplementary alignments")
     
     parser.add_argument('--subseg', action='store_true', required=False,
         help="infer the sub segment on amp")
@@ -114,99 +121,41 @@ def process_args(args):
     if args.outprefix is None:
         args.outprefix = args.bamfile.replace('.bam', '')
 
-    #@ output plot folder
-    args.outfig = args.outprefix + '_ask_plot'
-
     #@ set genome related files
-    if args.genome == 'hg19':
-        # blacklist file
-        args.blfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg19_blacklist.bed')  #
-
-        # gene annotation file
-        args.genefile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg19_refgene_process.bed12')
-        
-        # super encanher annotation file
-        args.sefile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'se_hg19_sort.bed')
-
-        # genome size file (currently not in use)
-        args.gsfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg19.genome')
-
-        # cancer gene file
-        args.cgfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data',
-                'Census_all_20200624_14_22_39.tsv')
-
-        # bias file (GC + mappability)
-        args.biasfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data',
-                'hg19_bias.bed.gz')  # ????????????
-
-    elif args.genome == 'hg38':
-        # blacklist file
-        args.blfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg38_blacklist.bed')
-
-        # gene annotation file
-        args.genefile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg38_refgene_process.bed12')
-
-        # super encanher annotation file
-        args.sefile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'se_hg38_sort.bed')
-
-        # genome size file (currently not in use)
-        args.gsfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'hg38.genome')
-
-        # cancer gene file
-        args.cgfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data',
-                'Census_all_20200624_14_22_39.tsv')
-
-        # bias file (GC + mappability)
-        args.biasfile = os.path.join(
-            os.path.dirname(__file__), '..', 'data',
-                'hg38_bias.bed.gz')
-
-    else:
-        args.blfile = None
-        args.genefile = None
-        args.gsfile = None
-        args.cgfile = None
-        print('Invalid genome build provided -- \
-            No blacklist filtering applied, no gene annotation applied.')
+    ask_files = resolve_ask_annotation_files(args.genome)
+    args.blfile = str(ask_files["blfile"]) if ask_files["blfile"] is not None else None
+    args.genefile = str(ask_files["genefile"]) if ask_files["genefile"] is not None else None
+    args.sefile = str(ask_files["sefile"]) if ask_files["sefile"] is not None else None
+    args.gsfile = str(ask_files["gsfile"]) if ask_files["gsfile"] is not None else None
+    args.cgfile = str(ask_files["cgfile"]) if ask_files["cgfile"] is not None else None
+    args.biasfile = str(ask_files["biasfile"]) if ask_files["biasfile"] is not None else None
 
     #@ create base dir of output files
-    Path(os.path.dirname(args.outprefix)).mkdir(parents=True, exist_ok=True)
-
-    #@ create base dir of plot files
-    Path(args.outfig).mkdir(parents=True, exist_ok=True)
+    ask_paths = prepare_ask_output_paths(args.outprefix)
+    args.outfig = str(ask_paths["outfig"])
 
     #@ set output file names
-    args.output_stats     = args.outprefix + '_ask_stats.tsv'
-    args.output_cnamp     = args.outprefix + '_ask_amplified_segment.tsv'
-    args.output_cnseg     = args.outprefix + '_ask_cn_segmentation.tsv'
+    args.output_stats     = str(ask_paths["output_stats"])
+    args.output_cnamp     = str(ask_paths["output_cnamp"])
+    args.output_cnseg     = str(ask_paths["output_cnseg"])
 
-    args.output_bpcand    = args.outprefix + '_ask_breakpoint.tsv'
-    args.output_bpduo     = args.outprefix + '_ask_breakpoint_pair_raw.tsv'
-    args.output_bppair    = args.outprefix + '_ask_breakpoint_pair.tsv'
-    args.output_seg       = args.outprefix + '_ask_breakpoint_seg.tsv'
-    args.output_circ      = args.outprefix + '_ask_amplicon_circular.tsv'
-    args.output_line      = args.outprefix + '_ask_amplicon_linear.tsv'
-    args.output_clip      = args.outprefix + '_ask_clip_count.bedgraph'
-    args.output_bincnt    = args.outprefix + '_ask_bin_count.tsv'
-    args.output_binnorm   = args.outprefix + '_ask_bin_count_norm.tsv'
-    args.output_align_dir     = args.outprefix + '_ask_junctionseq'
-    args.output_circ_stat = args.outprefix + '_ask_amplicon_circular_stat.tsv'
+    args.output_bpcand    = str(ask_paths["output_bpcand"])
+    args.output_bpduo     = str(ask_paths["output_bpduo"])
+    args.output_bppair    = str(ask_paths["output_bppair"])
+    args.output_seg       = str(ask_paths["output_seg"])
+    args.output_circ      = str(ask_paths["output_circ"])
+    args.output_line      = str(ask_paths["output_line"])
+    args.output_clip      = str(ask_paths["output_clip"])
+    args.output_bincnt    = str(ask_paths["output_bincnt"])
+    args.output_binnorm   = str(ask_paths["output_binnorm"])
+    args.output_align     = str(ask_paths["output_align"])
+    args.output_align_dir = str(ask_paths["output_align_dir"])
+    args.output_circ_stat = str(ask_paths["output_circ_stat"])
 
-    args.output_pdat_1    = args.outprefix + '_ask_step1.pdat'
-    args.output_pdat_2    = args.outprefix + '_ask_step2.pdat'
-    args.output_pdat_3    = args.outprefix + '_ask_step3.pdat'
-    args.output_pdat_4    = args.outprefix + '_ask_step4.pdat'
+    args.output_pdat_1    = str(ask_paths["output_pdat_1"])
+    args.output_pdat_2    = str(ask_paths["output_pdat_2"])
+    args.output_pdat_3    = str(ask_paths["output_pdat_3"])
+    args.output_pdat_4    = str(ask_paths["output_pdat_4"])
 
     return args
 
@@ -224,30 +173,46 @@ def main():
     #--------------------------------------------------------------------------#
     args = get_args()
     args = process_args(args)
-
+    
 
     #--------------------------------------------------------------------------#
     # load pdat
     #--------------------------------------------------------------------------#
     if int(args.run_from_pdat) >= 1 and os.path.isfile(args.output_pdat_1):
         try:
-            bp_all, clip_bg, bin_count, bp_duo_bam = pd.read_pickle(args.output_pdat_1)
+            bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = pd.read_pickle(args.output_pdat_1)
+            if type(bamfile) == float:
+                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask.process_alignment(
+                args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
+                mapq = args.mapq, nmmax = args.nmmax,
+                mode = args.segmode, sub_binsize = args.sub_binsize,
+                seg_robost_quant = args.segquant, SA_with_nm = args.SA_with_nm, downsample = args.downsample)
+                # output results
+                bin_count.to_csv(args.output_bincnt, sep='\t', index=False)
+                clip_bg.to_csv(args.output_clip, sep='\t', index=False, header=False)
+
+                # save pdat
+                pdat = [bp_all, clip_bg, bin_count, bp_duo_bam, bamfile]
+                with open(args.output_pdat_1, "wb") as f:
+                    pickle.dump(pdat, f)
+
+                # output log
+                print('alignment process - done \
+                    - {0:0.1f} seconds\n'.format(time.time() - startTime))
         except:
-            bp_all, clip_bg, bin_count = pd.read_pickle(args.output_pdat_1)
+            try:
+                bp_all, clip_bg, bin_count, bp_duo_bam = pd.read_pickle(args.output_pdat_1)
+                bamfile = args.bamfile
+            except:
+                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = pd.read_pickle(args.output_pdat_1)
 
     if int(args.run_from_pdat) >= 2 and os.path.isfile(args.output_pdat_2):
-        # with open(args.output_pdat_2, "rb") as f:
         cn_amp, cn_seg, bin_norm = pd.read_pickle(args.output_pdat_2)
-        # with open('/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_new/ask3_both_nm1_seg1_GBM39_1013.txt','a') as f:
-        #     f.write(f'step2 data already read.\n')        
-        # print(f'step2 data already read.')
+
     if int(args.run_from_pdat) >= 3 and os.path.isfile(args.output_pdat_3):
-        # with open(args.output_pdat_3, "rb") as f:
         bp_duo, bp_cand_stats = pd.read_pickle(args.output_pdat_3)
-        # with open('/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_new/ask3_both_nm1_seg1_GBM39_1013.txt','a') as f:
-        #     f.write(f'step3 data already read.\n')     
+
     if int(args.run_from_pdat) >= 4 and os.path.isfile(args.output_pdat_4):
-        # with open(args.output_pdat_4, "rb") as f:
         circ_anno, line_anno, bp_pair, seg = pd.read_pickle(args.output_pdat_4)
 
 
@@ -256,33 +221,25 @@ def main():
     #--------------------------------------------------------------------------#
     if 'bp_all' not in locals(): # and not os.path.exists(args.output_pdat_1)
         # run module
-        bp_all, clip_bg, bin_count, bp_duo_bam = ask.process_alignment(
+        bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask.process_alignment(
             args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
             mapq = args.mapq, nmmax = args.nmmax,
             mode = args.segmode, sub_binsize = args.sub_binsize,
-            seg_robost_quant = args.segquant, SA_with_nm = args.SA_with_nm)
+            seg_robost_quant = args.segquant, SA_with_nm = args.SA_with_nm, downsample = args.downsample)
 
-        # impossible = bp_all['left'].empty and bp_all['right'].empty
-        # assert impossible==True "This data do not have split reads, therefore not be deteced ecDNA!"
 
         # output results
         bin_count.to_csv(args.output_bincnt, sep='\t', index=False)
         clip_bg.to_csv(args.output_clip, sep='\t', index=False, header=False)
 
         # save pdat
-        pdat = [bp_all, clip_bg, bin_count, bp_duo_bam]
+        pdat = [bp_all, clip_bg, bin_count, bp_duo_bam, bamfile]
         with open(args.output_pdat_1, "wb") as f:
             pickle.dump(pdat, f)
 
         # output log
         print('alignment process - done \
             - {0:0.1f} seconds\n'.format(time.time() - startTime))
-    # else:
-    #     with open(args.output_pdat_1, 'rb') as f:
-    #         data = pickle.load(f)
-    # bp_all = data[0]
-    # clip_bg = data[1]
-    # bin_count = data[2]
 
 
     #--------------------------------------------------------------------------#
@@ -310,12 +267,7 @@ def main():
         # output log
         print('detect amplified segments - done \
             - {0:0.1f} seconds\n'.format(time.time() - startTime))
-    # else:
-    #     with open(args.output_pdat_2, 'rb') as f:
-    #         data = pickle.load(f)
-    #     cn_amp = data[0]
-    #     cn_seg = data[1]
-        # bin_count = data[2]
+
     
     #--------------------------------------------------------------------------#
     # step 3 : identify breakpoint pairs
@@ -323,7 +275,7 @@ def main():
     if 'bp_duo' not in locals():
         # run module
         bp_duo, bp_cand_stats = ask.detect_bp_pair(
-            args.bamfile, bp_duo_bam,  bp_all, cn_amp, args.blfile,
+            bamfile, bp_duo_bam,  bp_all, cn_amp, args.blfile,
             binsize = args.binsize, bp_min_clip = args.bpcount,
             mapq = args.mapq, nmmax = args.nmmax,
             max_n_bp = args.max_n_breakpoint,
@@ -356,7 +308,7 @@ def main():
             segment_restrict = False,
             min_junc_cnt = args.juncread, subseg = args.subseg, rm_amp_df = args.rm_amp_df,
             first_filter = args.first_filter, second_filter = args.second_filter, third_filter = args.third_filter,
-            knn = args.knn, saveseg = args.output_seg, savebp_bp_pair = args.output_bppair)
+            knn = args.knn, saveseg = args.output_seg, savebp_bp_pair = args.output_bppair, EGA=args.ega)
 
         # output results
         circ_anno.to_csv(args.output_circ, sep='\t', index=False)
@@ -364,12 +316,9 @@ def main():
         bp_pair.to_csv(args.output_bppair, sep='\t', index=False)
         seg.to_csv(args.output_seg, sep='\t', index=False)
 
-        # # output breakpoint pair alignment for all bp in bp_duo
-        # ask.output_bppair_alignment(bp_duo, args.bamfile, args.output_align)
-
+  
         # output breakpoint pair alignment
-        # output_bppair_alignment(bp_pair, bamfile, output_align_dir, circ_anno)
-        ask.output_bppair_alignment(bp_pair, args.bamfile, args.output_align_dir, circ_anno)
+        ask.output_bppair_alignment(bp_pair, bamfile, args.output_align_dir, circ_anno)
 
         # save pdat
         pdat = [circ_anno, line_anno, bp_pair, seg]
@@ -391,31 +340,30 @@ def main():
     # step 5 : plot amplicons
     #--------------------------------------------------------------------------#
     # run module
-    try:
-        ask.plot_amplicon(circ_anno, line_anno, cn_amp, args.genefile, args.sefile, 
-                          bin_norm, binsize = args.binsize,
-                          fig_dir = args.outfig, plot_n = 5,
-                          fig_width = 15, fontsize = 12, ext = 0.3)
-        # output log
-        print('plot amplicons - done \
-            - {0:0.1f} seconds\n'.format(time.time() - startTime))
-    except:
-        print('plot amplicons - error \
-            - {0:0.1f} seconds\n'.format(time.time() - startTime))
+    plot_ask_amplicons(
+        ask,
+        circ_anno,
+        line_anno,
+        cn_amp,
+        args.genefile,
+        args.sefile,
+        bin_norm,
+        fig_dir=args.outfig,
+        binsize=args.binsize,
+        plot_n=5,
+        fig_width=15,
+        fontsize=12,
+        ext=0.3,
+        start_time=startTime,
+        clean_old_pdf=True,
+    )
 
 
     #--------------------------------------------------------------------------#
     # output stats
     #--------------------------------------------------------------------------#
     # output statistics table
-    with open(args.output_stats, 'w') as f:
-        f.write('# of amplified segments: ' + str(len(cn_amp)) + '\n')
-        f.write('# of candidate breakpoints: ' + str(len(bp_cand_stats)) + '\n')
-        f.write('# of breakpoint pairs: ' + str(len(bp_duo)) + '\n')
-        f.write('# of circular amplicons: '
-            + str(circ_anno['AmpliconID'].nunique()) + '\n')
-        f.write('# of linear amplicons: '
-            + str(line_anno['AmpliconID'].nunique()) + '\n')
+    write_ask_stats(args.output_stats, cn_amp, bp_cand_stats, bp_duo, circ_anno, line_anno)
 
     print('All - done - {} seconds\n'.format(time.time() - startTime))
     if args.subseg:

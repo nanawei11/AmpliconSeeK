@@ -323,6 +323,9 @@ def get_bp_pair(reads_with_SA, bp_pair_info_file = None, mapq = 20):
                         index = [id for id, j in enumerate(suppls) if j[3] == b[4].replace('H','S') and j[2] == strand and j[0] == b[0]]
                         
                         try:
+                            if bp_pair_info_file:
+                                with open(bp_pair_info_file, 'a') as f:
+                                    f.write(f"readname_{read.query_name}\tread_sname_{read_s.query_name}\t{a}\t{b}\tafter\t")  
                             a, b, bp_pair, ba, offset, b_seq, a_seq = join_breakpoint_(read,read_s, suppls[index[0]], a, b)
                                                         
                             # bpp = str(bp_pair[:2]+ bp_pair[3:4] + bp_pair[6:8] + bp_pair[9:10])
@@ -382,6 +385,9 @@ def get_bp_pair(reads_with_SA, bp_pair_info_file = None, mapq = 20):
                                 strand = '+'
                             index = [id for id, j in enumerate(suppls) if j[3] == b[4].replace('H','S') and j[2] == strand and j[0] == b[0]]
                             try:
+                                if bp_pair_info_file:
+                                    with open(bp_pair_info_file, 'a') as f:
+                                        f.write(f"readname_{read.query_name}\tread_sname{read_s.query_name}\t{a}\t{b}\tafter\t") 
                                 a, b, bp_pair, ba, offset, b_seq, a_seq  = join_breakpoint_(read,read_s, suppls[index[0]], a, b)
                                 # bpp = str(bp_pair[:2]+ bp_pair[3:4] + bp_pair[6:8] + bp_pair[9:10])
                                 # bpp_r = str(bp_pair[6:8] + bp_pair[9:10]+ bp_pair[:2]+ bp_pair[3:4])
@@ -424,8 +430,8 @@ def get_bp_pair(reads_with_SA, bp_pair_info_file = None, mapq = 20):
                                 #                 [read.query_alignment_sequence] + [read_s.query_alignment_sequence] + [b_seq]+ [a_seq] + [ba])                     
                             except:
                                 print(f'{readname}: error!!!')
-        else:
-            print(f'check: {readname}, len is {len(readp)}!!!')
+        # else:
+        #     print(f'check: {readname}, len is {len(readp)}!!!')
     if len(bp_pair_dict) > 0:
         bp_pair_df_by_dict = pd.DataFrame(bp_pair_dict).T
         bp_pair_df_by_dict.index = list(bp_pair_dict.keys())

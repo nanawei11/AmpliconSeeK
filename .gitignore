@@ -1,0 +1,57 @@
+# macOS
+.DS_Store
+*/.DS_Store
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Sphinx generated docs
+docs/build/
+
+# ASK run outputs
+*_ask_plot/
+*_ask_junctionseq/
+*_ask_step*.pdat
+*_ask_stats.tsv
+*_ask_bin_count.tsv
+*_ask_bin_count_norm.tsv
+*_ask_cn_segmentation.tsv
+*_ask_clip_count.bedgraph
+*_ask_breakpoint.tsv
+*_ask_breakpoint_pair.tsv
+*_ask_breakpoint_pair_raw.tsv
+*_ask_breakpoint_seg.tsv
+*_ask_alignment_sequence.tsv
+*_ask_amplicon_circular.tsv
+*_ask_amplicon_circular_new.tsv
+*_ask_amplicon_circular_stat.tsv
+*_ask_amplicon_circular_stat_new.tsv
+*_ask_amplicon_linear.tsv
+*_ask_amplified_segment.tsv
+
+# ASK-search run outputs
+known_breakpoint_seed.tsv
+known_ecDNA_breakpoint_pairs.tsv
+known_ecDNA_segments.tsv
+*_ask_jcs.tsv
+
+# Large or derived reference files not required by the current package
+data/hg38full_k35_noMM.mappability.bedgraph
+data/hg38_bias.bed
+data/hg38_refgene.bed12
+
+# Local notebooks and debug scripts
+ask/debug*.ipynb
+ask/check_problem.ipynb
+ask/processdata.ipynb
+ask/python_plot.ipynb

@@ -75,7 +75,6 @@ def norm_glm(dfm, cutoff = [0, 0], method = 'nb', fold_bound = 5, plot = False):
     if norm_fac == 0:
         norm_fac = np.mean(bin_norm['Count'])
     bin_norm['CN'] = 2 * bin_norm['Count'] / norm_fac
-    # bin_norm['CN'] = 2 * bin_norm['Count'] / get_mode(bin_norm['Count'])
 
     if (plot):
         plt.plot(dfm.GCcontent, dfm.CN, 'o', alpha = 0.01)

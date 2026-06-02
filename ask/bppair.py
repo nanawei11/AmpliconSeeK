@@ -82,19 +82,33 @@ def estimaed_thred(bp_duo, i='current'):
             index = np.argmax(cusum_ratio <= 0.01)
 
         if (index >= 9) and (bp_duo.shape[0] <= 10000) and (index > 0):
-            if bp_duo.shape[0] <= 5000:
+            if bp_duo.shape[0] <= 2000:
                 index = np.min([np.argmax(cusum_ratio <= 0.05), 4])
-            else:
+            elif bp_duo.shape[0] <= 4000:
                 index = np.min([np.argmax(cusum_ratio <= 0.05), 6])
+            else:
+                index = np.min([np.argmax(cusum_ratio <= 0.05), 10])
+                
         idx = np.argmax(counts_ == nozero[index+1])
         thred = np.exp(bins_[idx:idx+2].mean())
 
-        if bp_duo.shape[0] <= 5000:
+        filter_ = bp_duo['Count'][ bp_duo['Count'] >= round(thred,0) ]
+
+        if filter_.shape[0] > 30000 :
+            thred = np.exp(data_.sort_values(ascending=False)[1200])    
+
+        if (bp_duo.shape[0] > 10000) and filter_.shape[0] > 1000:
+            thred = np.max([thred, 20])
+
+        if (bp_duo.shape[0] <= 5000) and filter_.shape[0] < 300:
             thred = np.min([thred, 5])
-    
-        filter = bp_duo['Count'][ bp_duo['Count'] >= round(thred,0) ]
-        print(f'sample:{i}, index: {index}, thred: {thred}, data.shape: {bp_duo.shape[0]}, filter shape: {filter.shape[0]}')
-        return index, thred, bp_duo.shape[0], filter.shape[0]
+            
+        if (bp_duo.shape[0] > 1000) and filter_.shape[0] >= 300:
+            thred = np.max([thred, 3])
+
+        filter_ = bp_duo['Count'][ bp_duo['Count'] >= round(thred,0) ]
+        print(f'sample:{i}, index: {index}, thred: {thred}, data.shape: {bp_duo.shape[0]}, filter shape: {filter_.shape[0]}')
+        return index, thred, bp_duo.shape[0], filter_.shape[0]
     
 #------------------------------------------------------------------------------#
 def simple_repeat_proportion(s, n_iter = 4):
@@ -176,17 +190,23 @@ def get_segment_on_cnamp(cn_amp_merged, bp_pair_m, knn = 3):
                 dst = bp_[1] - bp_pair_df_r['Coord1']
                 cand = bp_pair_df_r.loc[dst < 0].reset_index(drop=True)
                 ind = np.argsort(cand['Coord2'])
+                if (bp_[1] == 55904441) or (bp_[1] == 56049369):
+                    print(f'  ******* bp is L: {bp_}  from  {cand.iloc[ind[:knn],:]}*********')
                 if ind.shape[0] == 1:
                     seg_subcn.append([bp_[0]] + [bp_[1]] + [cand['Coord1'][ind[0]]])
                     rm_bp_fine.append(bp_)
                 else:
                     cand = cand.iloc[ind[:knn],:].reset_index(drop=True)
                     ind = np.argmax(cand['Count'])
+                    diff_first_max_ratio = (cand['Count'][ind] -  cand['Count'][0]) / cand['Count'][ind]
+                    if (diff_first_max_ratio <= 0.5 ) & (diff_first_max_ratio!=0):   
+                        seg_subcn.append([bp_[0]] + [bp_[1]] + [cand['Coord1'][0]])
                     seg_subcn.append([bp_[0]] + [bp_[1]] + [cand['Coord1'][ind]])
                     rm_bp_fine.append(bp_)
 
             except:
-                print(bp_)
+                1
+                # print(bp_)
         return  seg_subcn, rm_bp_fine
         
     def get_subseg_L(bp_, bp_pair_df_l, rm_bp_fine, seg_subcn, knn = knn):
@@ -196,18 +216,24 @@ def get_segment_on_cnamp(cn_amp_merged, bp_pair_m, knn = 3):
                 dst = bp_pair_df_l['Coord2'] - bp_[1]
                 cand = bp_pair_df_l.loc[dst < 0].reset_index(drop=True)
                 ind = np.argsort(-cand['Coord1'])
+                if (bp_[1] == 55904441) or (bp_[1] == 56049369):
+                    print(f'  ******* bp is R: {bp_}  from  {cand.iloc[ind[:knn],:]}*********')
                 if ind.shape[0] == 1:
                     seg_subcn.append([bp_[0]] + [cand['Coord2'][ind[0]]] + [bp_[1]])
                     rm_bp_fine.append(bp_)
                 else:
                     cand = cand.iloc[ind[:knn],:].reset_index(drop=True)
                     ind = np.argmax(cand['Count'])
+                    diff_first_max_ratio = (cand['Count'][ind] -  cand['Count'][0]) / cand['Count'][ind]
+                    if (diff_first_max_ratio <= 0.5 ) & (diff_first_max_ratio!=0):   
+                        seg_subcn.append([bp_[0]] + [cand['Coord2'][0]] + [bp_[1]])
                     seg_subcn.append([bp_[0]] + [cand['Coord2'][ind]] + [bp_[1]])
                     rm_bp_fine.append(bp_)
                 # if ind.shape[0] >  2:
                 #     seg_subcn.append([bp_[0]] + [bp_pair_df_l.loc[dst < 0, 'Coord2'].iloc[ind[1]]] + [bp_[1]])    
             except:
-                print(bp_)
+                # print(bp_)
+                1
         return  seg_subcn, rm_bp_fine  
 
     for i in cn_amp_merged:
@@ -308,7 +334,8 @@ def get_segment(bp_fine, bp_pair, cn_amp_merged, restrict = False, \
                         # for i in end:
                         #     seg.append(list(row[0:2]) + [i])
                     except:
-                        print(row, '\n')
+                        1
+                        # print(row, '\n')
 
             for d,row in df_r.iterrows():
                 if tuple(row[0:3]) not in rm_bp_fine:
@@ -326,7 +353,8 @@ def get_segment(bp_fine, bp_pair, cn_amp_merged, restrict = False, \
                         # for i in end:
                         #    seg.append([row[0]] + [i] + [row[1]])
                     except:
-                        print(row, '\n')
+                        1
+                        # print(row, '\n')
 
     # add segment from direct loop
     # in case detailed structure can't be found

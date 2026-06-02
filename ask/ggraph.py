@@ -1,21 +1,25 @@
 ################################################################################
 # GGraph class: search for circular amplicons
 ################################################################################
-#------------------------------------------------------------------------------#
+import gzip
 from collections import Counter, defaultdict
+from itertools import compress
 import numpy as np
 import pandas as pd
+from memory_profiler import profile
 
+import warnings
 
-#------------------------------------------------------------------------------#
+warnings.filterwarnings('ignore')
 import misc
-
-
 
 #------------------------------------------------------------------------------#
 # GGraph class: search for circular amplicons
 #------------------------------------------------------------------------------#
 class GGraph:
+    """
+    store and analyze genomic intervels
+    """
 
     # all nodes must be 0, 1, 2, 3, 4,...
     #--------------------------------------------------------------------------#
@@ -42,7 +46,7 @@ class GGraph:
     #--------------------------------------------------------------------------#
     def get_nodes(self):
         return list(self.graph.keys())
-    
+
     #--------------------------------------------------------------------------#
     def dfs_search_circle(self, v, visited, parent, path, allpath, nodebefore):
         """
@@ -90,7 +94,7 @@ class GGraph:
 
         return allpath
 
-
+    # @profile
     #--------------------------------------------------------------------------#
     def get_all_path_contain_circle(self):
         """
@@ -113,7 +117,7 @@ class GGraph:
         for i in node:
             if visited[i] == False:
                 self.dfs_search_circle(i, visited, -1, path, allpath, nodebefore)
-            # nodebefore.append(i)
+            nodebefore.append(i)
         return allpath
 
 
@@ -402,7 +406,7 @@ class GGraph:
         result[['Left_CN','Right_CN']]   = pd.DataFrame(CN_ext['Circ_ext_CN'])
         rearrange = ['AmpliconID', 'Chrom','Start', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_Var', 'CN_sum', 'CN_mean', 'CN_var', 'Left_CN', 'Right_CN', 'Gene_num', 'Cancergene_num', 'SE_num']
         return result[rearrange]
-
+    # @profile
     #--------------------------------------------------------------------------#
     def build_ggraph_from_bp(self, bp_pair, bp_fine, seg):
         """
@@ -496,85 +500,274 @@ class GGraph:
         return op
 
 
-def add_stats_circ(circ_anno, bin_norm, binsize):
-    '''
-    Compute the features for each circ and score for each circ based on these features. 
-    '''
-    # the length of each segs 
-    circ_anno['Length'] = circ_anno['End'] - circ_anno['Start']
 
+def stat_by_seg(circ_anno, bin_norm, binsize):
+    '''
+    Calculate the average CN and std of each segment of a cycle and the change multiple within each segment relative to the left and right edges of the segment
+    '''
+    # result_df = pd.DataFrame(columns=['AmpliconID', 'FragmentStart', 'FragmentEnd', 'MeanLeft', 'StdLeft', 'MeanRight', 'StdRight', 'MeanBetween', 'StdBetween'])
+    seg_stats = {}
+    result_dict_1 = {}
+    # for each circ
+    AmpliconIDs = circ_anno['AmpliconID'].unique()
+    for amplicon_id in AmpliconIDs:
+        # print(amplicon_id)
+        # get the all segment for current circ
+        fragments = circ_anno[circ_anno['AmpliconID'] == amplicon_id]
+        for i in range(len(fragments)):
+            #  region of current segment
+            chrom = fragments.iloc[i]['Chrom']
+            start = fragments.iloc[i]['Start']
+            end = fragments.iloc[i]['End']
+            if (chrom, start, end) in seg_stats:
+                exact_mean, exact_std = seg_stats[(chrom, start, end)]
+            else:
+                if end - start <= binsize:
+                    exact_mean = fragments.iloc[i]['CN']
+                    exact_std = -1
+                else:
+                    exact_region = bin_norm[(bin_norm['Chrom'] == chrom) & (bin_norm['Coord'] >= start) & (bin_norm['Coord'] <= end)]
+                    exact_mean = exact_region['CN'].mean()
+                    if exact_region.shape[0] == 1:
+                        exact_std = -1
+                    else:
+                        exact_std = exact_region['CN'].std()
+            seg_stats[(chrom, start, end)] = (exact_mean, exact_std)   
+
+            # left region of current segment 
+            if (i == 0) or (fragments.iloc[i]['Chrom'] != fragments.iloc[i - 1]['Chrom']):
+                start = fragments.iloc[i]['Start'] - 10 * binsize
+                end = fragments.iloc[i]['Start'] - binsize
+            else:
+                start = fragments.iloc[i-1]['End']
+                end = fragments.iloc[i]['Start']
+                if end - start <= binsize:
+                    start = start - binsize
+                    end = end + binsize
+
+            ## for ovelap seg or reback seg
+            if start > end:
+                start,end = end, start
+                
+            if (chrom, start, end) in seg_stats:
+                mean_left, std_left = seg_stats[(chrom, start, end)]
+            else:
+                between_region = bin_norm[(bin_norm['Chrom'] == chrom) & (bin_norm['Coord'] > start) & (bin_norm['Coord'] < end)]
+                mean_left = between_region['CN'].mean()
+                if between_region.shape[0] == 1:
+                    std_left = -1
+                else:
+                    std_left = between_region['CN'].std()
+
+            seg_stats[(chrom, start, end)] = (mean_left, std_left)
+
+
+            # right region of current segment 
+            if (i == len(fragments)-1) or (fragments.iloc[i]['Chrom'] != fragments.iloc[i + 1]['Chrom']):
+                start = fragments.iloc[i]['End'] + binsize
+                end = fragments.iloc[i]['End'] + 10 * binsize
+            else:
+                start = fragments.iloc[i]['End']
+                end = fragments.iloc[i + 1]['Start']
+                if end - start <= binsize:
+                    start = start - binsize
+                    end = end + binsize
+            
+            ## for ovelap seg or reback seg
+            if start > end:
+                start,end = end, start
+                    
+            if (chrom, start, end) in seg_stats:
+                mean_right, std_right = seg_stats[(chrom, start, end)]
+            else:
+                between_region = bin_norm[(bin_norm['Chrom'] == chrom) & (bin_norm['Coord'] > start) & (bin_norm['Coord'] < end)]
+                mean_right = between_region['CN'].mean()
+                if between_region.shape[0] == 1:
+                    std_right = -1
+                else:
+                    std_right = between_region['CN'].std()
+
+            seg_stats[(chrom, start, end)] = (mean_right, std_right)
+
+            result_dict_1[tuple(fragments.iloc[i][:7])] = (exact_mean, exact_std, mean_left, std_left, mean_right, std_right)
+    result_bin_norm = pd.DataFrame(result_dict_1).T
+    if not result_bin_norm.empty:
+        result_bin_norm.columns = ['Mean_Seg', 'Std_Seg', 'Left_Mean_Nearby', 'Left_Std_Nearby','Right_Mean_Nearby', 'Right_Std_Nearby']
+        result_stat_df = pd.concat([circ_anno.reset_index(drop=True),result_bin_norm.reset_index(drop=True)],axis=1)
+        
+        result_stat_df['Mean_Seg'][result_stat_df['Mean_Seg']<0]  = 2 # advoid chrM to -999999
+        result_stat_df['Mean_Seg'][result_stat_df['Mean_Seg']==0] +=  0.01
+        result_stat_df['Left_Mean_Nearby'][result_stat_df['Left_Mean_Nearby']==0] +=  0.01
+        result_stat_df['Right_Mean_Nearby'][result_stat_df['Right_Mean_Nearby']==0] +=  0.01
+        result_stat_df['Std_Seg'][result_stat_df['Std_Seg'] == 0] +=  0.01 
+        
+        result_stat_df['FoldChange_left'] = np.abs(np.log2(result_stat_df['Mean_Seg']/result_stat_df['Left_Mean_Nearby']))
+        result_stat_df['FoldChange_right'] =  np.abs(np.log2(result_stat_df['Mean_Seg']/result_stat_df['Right_Mean_Nearby']))
+        result_stat_df['invCV'] = result_stat_df['Mean_Seg']/result_stat_df['Std_Seg']
+    else:
+        result_stat_df = pd.DataFrame()
+    return result_stat_df
+
+
+def add_stats_circ(circ_anno, bin_norm, binsize=10000):
+    '''
+    compute the stats for each circ
+    '''
+
+    circ_anno = stat_by_seg(circ_anno, bin_norm, binsize)
+
+    # the length of each segs  
+    circ_anno['Length'] = circ_anno['End'] - circ_anno['Start']
+    circ_anno.loc[circ_anno['invCV'] < 0, 'invCV'] = abs(circ_anno.loc[circ_anno['invCV'] < 0, 'invCV']) / 100
+    # circ_anno['invCV']  = abs(circ_anno['invCV'])
+    circ_anno['invCV'] = np.log(circ_anno['invCV'] + 1)
     # group by AmpliconID
     grouped = circ_anno.groupby('AmpliconID')
-
-    # add stats for each circ
-    circ_stat = grouped.agg({
+    
+    # add stats
+    result = grouped.agg({
         'Chrom': 'count', 
         'Length': 'sum',
         'SplitCount': ['sum','mean','std'],
-        'CN': ['sum','mean', 'std']
+        'CN': ['sum','mean','std'], 
+        'FoldChange_left': ['sum','mean'],
+        'FoldChange_right': ['sum','mean'],
+        'invCV': ['sum','mean']
     }).reset_index()
 
     if 'Gene' in circ_anno.columns:
-        circ_stat['Gene_num'] = grouped['Gene'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
-    else:
-        circ_stat['Gene_count'] = 0
-
-    if 'CancerGene' in circ_anno.columns:
         try:
-            circ_stat['CancerGene_count'] = grouped['CancerGene'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
+            result['Gene_num'] = grouped['Gene'].apply(lambda x: x.str.split(';').str.len().sum()).tolist()
         except:
-            print(f'CancerGene_count is error; set is 0 {circ_anno["CancerGene"]}.')
-            circ_stat['CancerGene_count'] = 0
+            result['Gene_num']=0
     else:
-        circ_stat['CancerGene_count'] = 0
+        result['Gene_num'] = 0
+
+    if 'CancerGene' in circ_anno.columns:  
+        try:
+            result['CancerGene'] = grouped['CancerGene'].apply(lambda x: x.str.split(';').str.len().sum()).tolist()
+        except:
+            result['CancerGene'] = 0
+    else:
+        result['CancerGene'] = 0
         
     if 'SE' in circ_anno.columns:
-        circ_stat['SE_count'] = grouped['SE'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
+        try:
+            result['SE_count'] = grouped['SE'].apply(lambda x: x.str.split(';').str.len().sum()).tolist()
+        except:
+            result['SE_count'] = 0
     else:
-        circ_stat['SE_count'] = 0
+        result['SE_count'] = 0
         
-    circ_stat.columns = ['AmpliconID', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_std', 
-                    'CN_sum', 'CN_mean', 'CN_std', 'Gene_num', 'Cancergene_num', 'SE_num']
+    # get start and end position
+    first_seg = grouped.first()[['Chrom','Start']].reset_index(drop=True)
+    last_seg = grouped.last()[['Chrom','End']].reset_index(drop=True)
+    result = pd.concat([result, first_seg, last_seg], axis = 1)
 
-    start = grouped.head(1)[['AmpliconID', 'Chrom', 'Start']].reset_index(drop=True)
-    end = grouped.tail(1)[['Chrom', 'End']].reset_index(drop=True)
-    circ_interval = pd.concat([start, end], axis = 1)
-    CN_ext = {}
-    # add the mean CN of +/- 100000 of start/end
-    for row in circ_interval.itertuples():
-        if row[2:] not in CN_ext:
-            left = bin_norm[(bin_norm['Chrom'] == row[2]) & 
-                            (bin_norm['Coord'] < (row[3] - 2 * binsize)) &  
-                            (bin_norm['Coord'] > (row[3] - binsize * 10))]['CN'].mean()
-            right = bin_norm[(bin_norm['Chrom'] == row[4]) & 
-                            (bin_norm['Coord'] > (row[5] + 2 * binsize)) &  
-                            (bin_norm['Coord'] < (row[5] + binsize * 10))]['CN'].mean()
-            CN_ext[row[2:]] = [left, right]
-        else:
-            left, right = CN_ext[row[2:]]
+    result.columns = ['AmpliconID', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_std', \
+                      'CN_sum', 'CN_mean', 'CN_std', 'FCleft_sum','FCleft_mean', 'FCright_sum', 'FCright_mean', 'invCNCV_sum', 'invCNCV_mean', 'Gene_num', \
+                        'Cancergene_num', 'SE_num', 'Chrom1','Start', 'Chrom2', 'End']
+    # fill NAN to -1
+    result = result.fillna(-1)
+    result.loc[result['SplitCount_std']==0,'SplitCount_std'] = 0.2
+    result['invSplitCV'] = result['SplitCount_mean'] / result['SplitCount_std']
+    result.loc[result['invSplitCV'] < 0, 'invSplitCV'] = abs(result.loc[result['invSplitCV'] < 0, 'invSplitCV']) / 100
+    result['invSplitCV'] = np.log(result['invSplitCV'] + 1)
+    rearrange = ['AmpliconID', 'Chrom1','Start', 'Chrom2', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 
+                 'SplitCount_mean', 'SplitCount_std', 'CN_sum', 'CN_mean', 'CN_std', 
+                 'FCleft_sum','FCleft_mean', 'FCright_sum', 'FCright_mean', 'invCNCV_sum', 'invCNCV_mean', 'invSplitCV', 'Gene_num', 'Cancergene_num', 'SE_num']
+    result.loc[result['SplitCount_std'] == -1,'SplitCount_std'] = 1
+    result.loc[result['CN_std'] == -1,'CN_std'] = 1
+
+    result['FCright_mean_1'] = result['FCright_sum']/result['Seg_num']
+    result['FCleft_mean_1'] = result['FCleft_sum']/result['Seg_num']
+    result['Score1'] = result['FCleft_mean_1'] + result['FCright_mean_1'] + result['invCNCV_mean'] + result['invSplitCV']
+    result['Score'] = result['FCleft_mean'] + result['FCright_mean'] + result['invCNCV_mean'] + result['invSplitCV']
+    rearrange = ['AmpliconID', 'Chrom1','Start', 'Chrom2', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 
+                 'SplitCount_mean', 'SplitCount_std', 'CN_sum', 'CN_mean', 'CN_std', 
+                 'FCleft_sum','FCleft_mean', 'FCright_sum' ,'FCright_mean', 'invCNCV_sum', 'invCNCV_mean', 'invSplitCV', 
+                 'Gene_num', 'Cancergene_num', 'SE_num', 'FCleft_mean_1', 'FCright_mean_1', 'Score', 'Score1']
+    return result[rearrange]
+
+# def add_stats_circ(circ_anno, bin_norm, binsize):
+#     '''
+#     Compute the features for each circ and score for each circ based on these features. 
+#     '''
+#     # the length of each segs 
+#     circ_anno['Length'] = circ_anno['End'] - circ_anno['Start']
+
+#     # group by AmpliconID
+#     grouped = circ_anno.groupby('AmpliconID')
+
+#     # add stats for each circ
+#     circ_stat = grouped.agg({
+#         'Chrom': 'count', 
+#         'Length': 'sum',
+#         'SplitCount': ['sum','mean','std'],
+#         'CN': ['sum','mean', 'std']
+#     }).reset_index()
+
+#     if 'Gene' in circ_anno.columns:
+#         circ_stat['Gene_num'] = grouped['Gene'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
+#     else:
+#         circ_stat['Gene_count'] = 0
+
+#     if 'CancerGene' in circ_anno.columns:
+#         try:
+#             circ_stat['CancerGene_count'] = grouped['CancerGene'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
+#         except:
+#             print(f'CancerGene_count is error; set is 0 {circ_anno["CancerGene"]}.')
+#             circ_stat['CancerGene_count'] = 0
+#     else:
+#         circ_stat['CancerGene_count'] = 0
+        
+#     if 'SE' in circ_anno.columns:
+#         circ_stat['SE_count'] = grouped['SE'].apply(lambda x: x.str.split(';').str.len().sum()).reset_index(drop=True)
+#     else:
+#         circ_stat['SE_count'] = 0
+        
+#     circ_stat.columns = ['AmpliconID', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_std', 
+#                     'CN_sum', 'CN_mean', 'CN_std', 'Gene_num', 'Cancergene_num', 'SE_num']
+
+#     start = grouped.head(1)[['AmpliconID', 'Chrom', 'Start']].reset_index(drop=True)
+#     end = grouped.tail(1)[['Chrom', 'End']].reset_index(drop=True)
+#     circ_interval = pd.concat([start, end], axis = 1)
+#     CN_ext = {}
+#     # add the mean CN of +/- 100000 of start/end
+#     for row in circ_interval.itertuples():
+#         if row[2:] not in CN_ext:
+#             left = bin_norm[(bin_norm['Chrom'] == row[2]) & 
+#                             (bin_norm['Coord'] < (row[3] - 2 * binsize)) &  
+#                             (bin_norm['Coord'] > (row[3] - binsize * 10))]['CN'].mean()
+#             right = bin_norm[(bin_norm['Chrom'] == row[4]) & 
+#                             (bin_norm['Coord'] > (row[5] + 2 * binsize)) &  
+#                             (bin_norm['Coord'] < (row[5] + binsize * 10))]['CN'].mean()
+#             CN_ext[row[2:]] = [left, right]
+#         else:
+#             left, right = CN_ext[row[2:]]
             
-        if 'Circ_ext_CN' not in CN_ext:
-            CN_ext['Circ_ext_CN'] = [(left, right)]
-        else:
-            CN_ext['Circ_ext_CN'].append((left, right))
+#         if 'Circ_ext_CN' not in CN_ext:
+#             CN_ext['Circ_ext_CN'] = [(left, right)]
+#         else:
+#             CN_ext['Circ_ext_CN'].append((left, right))
 
-    circ_interval[['Left_CN','Right_CN']]   = pd.DataFrame(CN_ext['Circ_ext_CN'])
-    circ_stat = pd.merge(circ_stat, circ_interval.iloc[:,[0,1,2,4,5,6]], on = 'AmpliconID')
-    rearrange = ['AmpliconID', 'Chrom','Start', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_std', 'CN_sum', 'CN_mean', 'CN_std', 'Left_CN', 'Right_CN', 'Gene_num', 'Cancergene_num', 'SE_num']
-    circ_stat = circ_stat[rearrange]
+#     circ_interval[['Left_CN','Right_CN']]   = pd.DataFrame(CN_ext['Circ_ext_CN'])
+#     circ_stat = pd.merge(circ_stat, circ_interval.iloc[:,[0,1,2,4,5,6]], on = 'AmpliconID')
+#     rearrange = ['AmpliconID', 'Chrom','Start', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 'SplitCount_std', 'CN_sum', 'CN_mean', 'CN_std', 'Left_CN', 'Right_CN', 'Gene_num', 'Cancergene_num', 'SE_num']
+#     circ_stat = circ_stat[rearrange]
 
-    circ_stat.iloc[:,2:] = np.log(circ_stat.iloc[:,2:].astype(float) + 1)
+#     circ_stat.iloc[:,2:] = np.log(circ_stat.iloc[:,2:].astype(float) + 1)
 
-    ## integrate feature
-    circ_stat['F1'] = circ_stat['SplitCount_mean']/(circ_stat['SplitCount_std'] + 0.5) + circ_stat['SplitCount_mean']/(circ_stat['SplitCount_mean']).sum()
-    circ_stat['F2'] = circ_stat['CN_mean']/(circ_stat['CN_std'] + 0.5)  + circ_stat['CN_mean']/(circ_stat['CN_mean']).sum()
-    circ_stat['F3'] = circ_stat['CN_mean']/(circ_stat['Right_CN'])
-    circ_stat['F4'] = circ_stat['CN_mean']/(circ_stat['Left_CN'])
-    circ_stat = circ_stat.fillna(0)   
-    coef_ = np.array([0.01, 1.5,  1.5,  0.5, 0.5])
-    # Score the circ
-    score = circ_stat.loc[circ_stat['Gene_num'] > 0, ['Seg_num', 'F1', 'F2', 'F3','F4']].values @ coef_ 
-    circ_stat['Score'] = 0
-    circ_stat['Score'][circ_stat['Gene_num'] > 0]  = score
+#     ## integrate feature
+#     circ_stat['F1'] = circ_stat['SplitCount_mean']/(circ_stat['SplitCount_std'] + 0.5) + circ_stat['SplitCount_mean']/(circ_stat['SplitCount_mean']).sum()
+#     circ_stat['F2'] = circ_stat['CN_mean']/(circ_stat['CN_std'] + 0.5)  + circ_stat['CN_mean']/(circ_stat['CN_mean']).sum()
+#     circ_stat['F3'] = circ_stat['CN_mean']/(circ_stat['Right_CN'])
+#     circ_stat['F4'] = circ_stat['CN_mean']/(circ_stat['Left_CN'])
+#     circ_stat = circ_stat.fillna(0)   
+#     coef_ = np.array([0.01, 1.5,  1.5,  0.5, 0.5])
+#     # Score the circ
+#     score = circ_stat.loc[circ_stat['Gene_num'] > 0, ['Seg_num', 'F1', 'F2', 'F3','F4']].values @ coef_ 
+#     circ_stat['Score'] = 0
+#     circ_stat['Score'][circ_stat['Gene_num'] > 0]  = score
    
-    return circ_stat
+#     return circ_stat
