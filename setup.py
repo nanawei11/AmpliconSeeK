@@ -5,7 +5,8 @@ setup(
     name="ask-ecdna",
     version="0.1.0",
     description="ASK de novo ecDNA detection and targeted ASK-search",
-    packages=find_packages(include=["ask", "ask.*"]),
+    packages=find_packages(include=["ask", "ask.*", "data"]),
+    package_data={"data": ["*"]},
     include_package_data=True,
     python_requires=">=3.8",
     install_requires=[

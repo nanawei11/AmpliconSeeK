@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import itertools
 import json
 import pickle
@@ -530,15 +531,15 @@ def plot_target_amplicons(
     """
     Plot amplicon figures with the original ASK plotting function.
     """
-    load_ask_modules(ask_path)
-    import ask
+    modules = load_ask_modules(ask_path)
+    ask_core = modules["ask"]
     import trackplot
 
-    print(f"plot amplicons - ask.py: {ask.__file__}")
+    print(f"plot amplicons - ask.py: {ask_core.__file__}")
     print(f"plot amplicons - trackplot.py: {trackplot.__file__}")
     print(f"plot amplicons - genefile: {genefile}")
     plot_ask_amplicons(
-        ask,
+        ask_core,
         circ_anno,
         line_anno,
         cn_amp,
@@ -826,7 +827,17 @@ def load_ask_modules(ask_path: str | Path | None = None):
     import ggraph
     import getbppair
 
+    ask_file = first_existing_path([Path(path) / "ask.py" for path in candidate_paths])
+    if ask_file is None:
+        raise FileNotFoundError("Could not find ASK core module ask.py")
+    spec = importlib.util.spec_from_file_location("ask_core_module", ask_file)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load ASK core module from {ask_file}")
+    ask_core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ask_core)
+
     return {
+        "ask": ask_core,
         "bpdetect": bpdetect,
         "bpjoint": bpjoint,
         "bppair": bppair,

@@ -5,8 +5,24 @@ import time
 from pathlib import Path
 import pickle
 import pandas as pd
-import ask
-from ask_utils import plot_ask_amplicons, prepare_ask_output_paths, resolve_ask_annotation_files, write_ask_stats
+try:
+    from . import ask as ask_core
+except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
+    import ask as ask_core
+try:
+    from .ask_utils import (
+        plot_ask_amplicons,
+        prepare_ask_output_paths,
+        resolve_ask_annotation_files,
+        write_ask_stats,
+    )
+except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
+    from ask_utils import (
+        plot_ask_amplicons,
+        prepare_ask_output_paths,
+        resolve_ask_annotation_files,
+        write_ask_stats,
+    )
 
 
 #------------------------------------------------------------------------------#
@@ -182,7 +198,7 @@ def main():
         try:
             bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = pd.read_pickle(args.output_pdat_1)
             if type(bamfile) == float:
-                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask.process_alignment(
+                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask_core.process_alignment(
                 args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
                 mapq = args.mapq, nmmax = args.nmmax,
                 mode = args.segmode, sub_binsize = args.sub_binsize,
@@ -221,7 +237,7 @@ def main():
     #--------------------------------------------------------------------------#
     if 'bp_all' not in locals(): # and not os.path.exists(args.output_pdat_1)
         # run module
-        bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask.process_alignment(
+        bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask_core.process_alignment(
             args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
             mapq = args.mapq, nmmax = args.nmmax,
             mode = args.segmode, sub_binsize = args.sub_binsize,
@@ -248,7 +264,7 @@ def main():
     if 'cn_amp' not in locals(): #and not os.path.exists(args.output_pdat_2)
         # run module
         cn_amp, cn_seg, bin_norm = \
-            ask.detect_amplified_segment(
+            ask_core.detect_amplified_segment(
                 bin_count, bp_all,
                 args.blfile, args.genefile, args.gsfile, args.cgfile,
                 biasfile = args.biasfile,
@@ -274,7 +290,7 @@ def main():
     #--------------------------------------------------------------------------#
     if 'bp_duo' not in locals():
         # run module
-        bp_duo, bp_cand_stats = ask.detect_bp_pair(
+        bp_duo, bp_cand_stats = ask_core.detect_bp_pair(
             bamfile, bp_duo_bam,  bp_all, cn_amp, args.blfile,
             binsize = args.binsize, bp_min_clip = args.bpcount,
             mapq = args.mapq, nmmax = args.nmmax,
@@ -303,7 +319,7 @@ def main():
     #--------------------------------------------------------------------------#
     if 'circ_anno' not in locals():
         # run module
-        circ_anno, line_anno, bp_pair, seg, circ_score = ask.construct_amplicon(
+        circ_anno, line_anno, bp_pair, seg, circ_score = ask_core.construct_amplicon(
             bp_duo, bp_cand_stats, cn_amp, bin_norm, args.genefile, args.sefile, args.cgfile, 
             segment_restrict = False,
             min_junc_cnt = args.juncread, subseg = args.subseg, rm_amp_df = args.rm_amp_df,
@@ -318,7 +334,7 @@ def main():
 
   
         # output breakpoint pair alignment
-        ask.output_bppair_alignment(bp_pair, bamfile, args.output_align_dir, circ_anno)
+        ask_core.output_bppair_alignment(bp_pair, bamfile, args.output_align_dir, circ_anno)
 
         # save pdat
         pdat = [circ_anno, line_anno, bp_pair, seg]
@@ -341,7 +357,7 @@ def main():
     #--------------------------------------------------------------------------#
     # run module
     plot_ask_amplicons(
-        ask,
+        ask_core,
         circ_anno,
         line_anno,
         cn_amp,
