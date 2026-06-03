@@ -5,8 +5,9 @@ AmpliconSeeK (ASK) is a Python toolkit for detecting and reconstructing amplifie
 
 The workflow of AmpliconSeeK:
 
-
-<img src="https://github.com/nanawei11/AmpliconSeeK/raw/main/Figure/Figure1_v2.png" width="45%" />
+<p align="center">
+  <img src="https://github.com/nanawei11/AmpliconSeeK/raw/main/Figure/Figure1_v2.png" width="55%" />
+</p>
 
 
 **Current version:** `0.1.1`
