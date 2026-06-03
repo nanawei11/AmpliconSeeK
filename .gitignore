@@ -55,3 +55,5 @@ ask/debug*.ipynb
 ask/check_problem.ipynb
 ask/processdata.ipynb
 ask/python_plot.ipynb
+
+exampledata/EGA-ATAC-analysis/
