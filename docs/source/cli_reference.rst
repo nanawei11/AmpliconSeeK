@@ -1,7 +1,7 @@
-Command Line Reference
+Command line reference
 ======================
 
-De Novo Detection
+De novo detection
 -----------------
 
 .. code-block:: bash
@@ -62,7 +62,7 @@ Core options:
      - ``0``
      - Resume from saved intermediate ``.pdat`` files.
 
-Targeted Search
+Targeted search
 ---------------
 
 .. code-block:: bash

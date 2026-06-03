@@ -2,6 +2,11 @@
 
 AmpliconSeeK (ASK) is a Python toolkit for detecting and reconstructing amplified genomic structures and candidate extrachromosomal DNA (ecDNA) from indexed alignment files, supporting both de novo discovery and targeted search of known ecDNA structures.
 
+
+The workflow of AmpliconSeeK:
+
+![AmpliconSeeK workflow](https://github.com/nanawei11/AmpliconSeeK/raw/main/Figure/Figure1_v2.png)
+
 **Current version:** `0.1.1`
 
 ## Table of Contents
@@ -511,7 +516,7 @@ ASK can also be used modularly:
 
 ## License
 
-ASK is released under the MIT License. See [LICENSE](https://github.com/nanawei11/AmpliconSeeK/blob/main/LICENSE) for details. 
+ASK is released under the MIT License. See [LICENSE](https://github.com/nanawei11/AmpliconSeeK/blob/main/LICENSE) for details.
 
 ## Contact
 

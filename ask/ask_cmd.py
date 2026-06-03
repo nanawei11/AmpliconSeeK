@@ -10,6 +10,10 @@ try:
 except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
     import ask as ask_core
 try:
+    from .sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
+    from sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+try:
     from .ask_utils import (
         plot_ask_amplicons,
         prepare_ask_output_paths,
@@ -75,7 +79,7 @@ def get_args():
                          such as ChIP-seq input, WGS.
             'bias' : calculate smoothed read counts in target bins,
                      used for data with coverage bias,
-                     such as ChIP-seq test, ATAC-seq, Exome-seq.
+                     such as ChIP-seq test, ATAC-seq, Exome-seq, WES, MNase-seq, TartgetCapture.
             ''')
     parser.add_argument('--ega', action='store_true', required=False,
         help="infer the sub segment on amp")
@@ -327,10 +331,18 @@ def main():
             knn = args.knn, saveseg = args.output_seg, savebp_bp_pair = args.output_bppair, EGA=args.ega)
 
         # output results
+        bp_pair = clean_barcode_columns(bp_pair)
         circ_anno.to_csv(args.output_circ, sep='\t', index=False)
         line_anno.to_csv(args.output_line, sep='\t', index=False)
         bp_pair.to_csv(args.output_bppair, sep='\t', index=False)
         seg.to_csv(args.output_seg, sep='\t', index=False)
+        write_sc_matrices_if_single_cell(
+            bp_pair,
+            circ_anno,
+            f"{args.outprefix}_ask_sc",
+            bam_path=bamfile,
+            mapq=args.mapq,
+        )
 
   
         # output breakpoint pair alignment

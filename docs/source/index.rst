@@ -1,4 +1,4 @@
-AmpliconSeeK Documentation
+AmpliconSeeK documentation
 ==========================
 
 AmpliconSeeK (ASK) is a Python toolkit for detecting amplified genomic
@@ -13,7 +13,7 @@ The main workflows are:
 
 .. toctree::
    :maxdepth: 2
-   :caption: User Guide
+   :caption: User guide
 
    installation
    quickstart

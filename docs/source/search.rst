@@ -1,4 +1,4 @@
-Targeted ecDNA Search
+Targeted ecDNA search
 =====================
 
 ``ask-search`` tests whether a known ecDNA structure is supported in a query
@@ -7,7 +7,7 @@ collection, then runs ASK-style matching, junction sequence extraction, copy
 number estimation, circular reconstruction, plotting, and Junction Concordance
 Score (JCS) reporting.
 
-Run Search on the Example Data
+Run search on the example data
 ------------------------------
 
 First run the ``ask`` quick-start command to generate:
@@ -28,7 +28,7 @@ Then use that circular amplicon table as the known structure:
      -o exampledata/testdata_search \
      --outprefix exampledata/testdata_search/testdata_search
 
-Known Structure Format
+Known structure format
 ----------------------
 
 The ``--circular`` argument uses:
@@ -59,7 +59,7 @@ should contain:
      - 55971771
      - +
 
-Junction Concordance Score
+Junction concordance score
 --------------------------
 
 For each reference circle, ASK-search reports:

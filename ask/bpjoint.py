@@ -604,6 +604,16 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
             return []
         return [value]
 
+    def clean_barcode_list(value):
+        barcodes = []
+        for barcode in as_list(value):
+            if barcode is None or (isinstance(barcode, float) and np.isnan(barcode)):
+                continue
+            barcode = str(barcode).strip()
+            if barcode and barcode not in {'None', 'nan'}:
+                barcodes.append(barcode)
+        return barcodes
+
     if not bp_duo_bam.empty and 'Readsbarcode' not in bp_duo_bam.columns:
         bp_duo_bam = bp_duo_bam.copy()
         if 'Readsname' in bp_duo_bam.columns:
@@ -711,9 +721,13 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
                 "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq', 'Readname', 'Readbarcode']
 
     bp_pair_df = pd.DataFrame(t1, columns = colnames).reset_index(drop=True)
+    
+    if 'Readbarcode' in bp_pair_df.columns:
+        bp_pair_df['Readbarcode'] = bp_pair_df['Readbarcode'].map(clean_barcode_list)
     if bp_pair_df.shape[0] > 1:
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 1)
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 2)
+    bp_pair_df = bp_pair_df.drop(columns=['Readname'], errors='ignore')
     return bp_pair_df.sort_values(
         'Count', ascending = False).reset_index(drop=True)
 
@@ -898,6 +912,9 @@ def get_bppair_peread(bamfile, bp_cand_df, \
     colnames = ["Chrom1", "Coord1", "Clip1",
                 "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq', 'Readname', 'Readbarcode']
     bp_pair_df = pd.DataFrame(op, columns = colnames)
+    if 'Readbarcode' in bp_pair_df.columns:
+        bp_pair_df['Readbarcode'] = [[] for _ in range(bp_pair_df.shape[0])]
+    bp_pair_df = bp_pair_df.drop(columns=['Readname'], errors='ignore')
 
     return bp_pair_df.sort_values(
         'Count', ascending=False).reset_index(drop=True)

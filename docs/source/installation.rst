@@ -1,7 +1,7 @@
 Installation
 ============
 
-Create a Conda Environment
+Create a Conda environment
 --------------------------
 
 Install Miniconda by following the official Conda instructions, then configure
@@ -34,7 +34,7 @@ Check the command line entry points:
    ask --help
    ask-search --help
 
-Required Input
+Required input
 --------------
 
 ASK expects a sorted BAM file and an index file in the same directory:

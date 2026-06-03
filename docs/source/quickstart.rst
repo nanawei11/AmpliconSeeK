@@ -1,7 +1,7 @@
-Quick Start
+Quick start
 ===========
 
-Run the Example BAM
+Run the example BAM
 -------------------
 
 The repository includes a small example BAM file under ``exampledata/``.
@@ -26,7 +26,7 @@ The main circular amplicon plot is expected at:
 
    exampledata/testdata_ask_plot/circular_circ_6.pdf
 
-Run from Your Own BAM
+Run from your own BAM
 ---------------------
 
 For a sorted and indexed BAM file:
@@ -65,7 +65,7 @@ Sort, mark duplicates, and index:
 
    samtools index test.bam
 
-Common Checks
+Common checks
 -------------
 
 Before running ASK, confirm:

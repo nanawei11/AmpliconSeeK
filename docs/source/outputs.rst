@@ -1,4 +1,4 @@
-Output Files
+Output files
 ============
 
 ASK writes files using:
@@ -7,7 +7,7 @@ ASK writes files using:
 
    {outprefix}_ask_{result_name}
 
-Main De Novo Outputs
+Main de novo outputs
 --------------------
 
 .. list-table::
@@ -48,7 +48,7 @@ Main De Novo Outputs
    * - ``*_ask_step1.pdat`` to ``*_ask_step4.pdat``
      - Intermediate cache files for rerunning later steps.
 
-ASK-search Outputs
+ASK-search outputs
 ------------------
 
 In addition to ASK-style outputs, ``ask-search`` writes:

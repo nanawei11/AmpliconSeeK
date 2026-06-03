@@ -328,6 +328,7 @@ def output_bppair_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
         # bamfile_init = covbam.prebamfile(bamfile_)
         # bamfile_init.downsample_ratio = downsample_ratio
         bpjoint.ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno)
+
 # @profile
 def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     '''
@@ -384,8 +385,9 @@ def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
     if (sefile is not None):
         circ_anno = grange.GRange.map_senchancer(circ_anno, sefile)
     return gg, all_circ_path, circ_anno, second_find
-# @profile
+
 #------------------------------------------------------------------------------#
+# @profile
 def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm, 
                        genefile = None, sefile = None, cgfile = None, 
                        min_junc_cnt = 10, bpp_min_dist = 200,
@@ -644,8 +646,8 @@ def plot_amplicon(circ_anno, line_anno = None, cn_amp = None,
 
 if __name__ == '__main__':
     datapath = '/Users/weina/ask-main/data'
-    resultpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
-    resfigpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
+    resultpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask'
+    resfigpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask'
     from pathlib import Path
     import os
     import time

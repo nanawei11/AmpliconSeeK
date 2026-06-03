@@ -35,6 +35,7 @@ setup(
     packages=find_packages(include=["ask", "ask.*", "data"]),
     package_data={"data": ["*"]},
     include_package_data=True,
+    python_requires=">=3.8",
     install_requires=[
         "numpy",
         "pandas",
@@ -45,18 +46,6 @@ setup(
         "seaborn",
         "scikit-learn",
     ],
-    classifiers=[
-        "Programming Language :: Python",
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-        "Topic :: Scientific/Engineering :: Bio-Informatics",
-    ],
-    python_requires=">=3.8",
     entry_points={
         "console_scripts": [
             "ask=ask.cli:ask_main",

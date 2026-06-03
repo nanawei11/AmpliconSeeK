@@ -52,6 +52,11 @@ except ImportError:  # Allow direct script execution: python ask/ecDNA_search.py
     )
 
 try:
+    from .sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+except ImportError:  # Allow direct script execution: python ask/ecDNA_search.py ...
+    from sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+
+try:
     import pysam
 except ImportError:  # pragma: no cover - notebook users may install pysam later.
     pysam = None
@@ -1565,7 +1570,6 @@ def match_bp_duo_to_known_breakpoints(
                         "Count": cand.get("Count", 0),
                         "offset": cand.get("offset", None),
                         "Seq": cand.get("Seq", None),
-                        "Readsname": cand.get("Readsname", cand.get("Readname", [])),
                         "Readsbarcode": cand.get("Readsbarcode", cand.get("Readbarcode", [])),
                     }
                 )
@@ -1652,7 +1656,6 @@ def compute_jcs_tables(
                 {
                     "Count": count,
                     "Seq": cand.get("Seq", ""),
-                    "Readsname": cand.get("Readsname", cand.get("Readname", [])),
                     "Readsbarcode": cand.get("Readsbarcode", cand.get("Readbarcode", [])),
                     "SequenceMatch": seq_match,
                     "Chrom1": cand.get("Chrom1", ""),
@@ -1682,7 +1685,6 @@ def compute_jcs_tables(
                 "SupportReadCount": support_count,
                 "Validated": validated,
                 "BestSeq": best.get("Seq", ""),
-                "BestReadsname": best.get("Readsname", []),
                 "BestReadsbarcode": best.get("Readsbarcode", []),
                 "SequenceMatch": best.get("SequenceMatch", False),
                 "MatchedChrom1": best.get("Chrom1", ""),
@@ -2007,6 +2009,8 @@ def evidence_from_targeted_bppair_matches(
     for _, row in matched_pairs.iterrows():
         readnames = list(dict.fromkeys(parse_list_cell(row.get("Readsname", []))))
         readbarcodes = parse_list_cell(row.get("Readsbarcode", []))
+        if not readnames and readbarcodes:
+            readnames = [None] * len(readbarcodes)
         if len(readbarcodes) < len(readnames):
             readbarcodes.extend([None] * (len(readnames) - len(readbarcodes)))
         if not readnames:
@@ -2629,11 +2633,19 @@ def run_bam_search(args: argparse.Namespace) -> None:
             )
         except Exception:
             pass
+    bp_pair = clean_barcode_columns(bp_pair)
     write_table(bp_pair, ask_outputs["output_bppair"])
     write_table(seg, ask_outputs["output_seg"])
     write_table(circ_anno, ask_outputs["output_circ"])
     write_table(line_anno, ask_outputs["output_line"])
     write_table(circ_score, ask_outputs["output_circ_stat"])
+    write_sc_matrices_if_single_cell(
+        bp_pair,
+        circ_anno,
+        f"{Path(ask_outputs['output_bppair']).with_name(Path(ask_outputs['output_bppair']).name.replace('_ask_breakpoint_pair.tsv', '_ask_sc'))}",
+        bam_path=args.bam,
+        mapq=args.mapq,
+    )
     write_junction_sequence_outputs(
         bp_pair,
         bam_path=args.bam,
