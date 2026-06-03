@@ -57,8 +57,6 @@ except ImportError:  # pragma: no cover - notebook users may install pysam later
     pysam = None
 
 
-TARGET_GENES = ("EGFR", "MDM4", "PDGFRA")
-
 MODULE_DIR = Path(__file__).resolve().parent
 
 DEFAULT_ASK_PATHS = (
@@ -106,8 +104,7 @@ ASK_CIRCULAR_NOHEADER_COLUMNS = [
     "Start",
     "End",
     "Strand",
-    "Score1",
-    "Score2",
+    "Score",
     "AmpliconID",
     "Gene",
     "CancerGene",
@@ -121,8 +118,8 @@ def read_circular_table(path: str | Path) -> pd.DataFrame:
 
     Supports both:
       1. Headered tables with AmpliconID/Chrom/Start/End/Strand columns.
-      2. ASK2/ASK no-header circular TSV:
-         Chrom, Start, End, Strand, Score1, Score2, AmpliconID,
+      2. ASK no-header circular TSV:
+         Chrom, Start, End, Strand, Score, AmpliconID,
          Gene, CancerGene, SegmentEdge.
     """
     df = read_table(path)
@@ -131,11 +128,11 @@ def read_circular_table(path: str | Path) -> pd.DataFrame:
         return df
 
     raw = pd.read_csv(path, sep="\t", header=None)
-    if raw.shape[1] < 7:
+    if raw.shape[1] < 6:
         raise ValueError(
             f"Cannot parse circular ecDNA structure table: {path}. "
             "Expected either a headered table with AmpliconID/Chrom/Start/End/Strand "
-            "or an ASK no-header table with at least 7 columns."
+            "or an ASK no-header table with at least 6 columns."
         )
     names = ASK_CIRCULAR_NOHEADER_COLUMNS[: raw.shape[1]]
     if raw.shape[1] > len(names):
@@ -1127,6 +1124,7 @@ def known_breakpoint_seed_table(breakpoints: pd.DataFrame) -> pd.DataFrame:
                 "offset": 0,
                 "Seq": "Known_Input",
                 "Readsname": [],
+                "Readsbarcode": [],
                 "CircleID": getattr(row, "CircleID", ""),
                 "BreakpointID": getattr(row, "BreakpointID", ""),
             }
@@ -1142,6 +1140,7 @@ def known_breakpoint_seed_table(breakpoints: pd.DataFrame) -> pd.DataFrame:
         "offset",
         "Seq",
         "Readsname",
+        "Readsbarcode",
         "CircleID",
         "BreakpointID",
     ]
@@ -1174,11 +1173,12 @@ def bpduo_bam_seed_columns(df: pd.DataFrame) -> pd.DataFrame:
         "offset",
         "Seq",
         "Readsname",
+        "Readsbarcode",
     ]
     if df.empty:
         return pd.DataFrame(columns=columns)
     out = df.copy()
-    for col, default in [("Count", 1), ("offset", 0), ("Seq", ""), ("Readsname", [])]:
+    for col, default in [("Count", 1), ("offset", 0), ("Seq", ""), ("Readsname", []), ("Readsbarcode", [])]:
         if col not in out.columns:
             out[col] = default
     return out[columns]
@@ -1235,7 +1235,7 @@ def target_detect_bp_pair(
 
     seed = bpduo_bam_seed_columns(known_seed)
     assembled_pairs = []
-    empty_seed = pd.DataFrame(columns=["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq", "Readsname"])
+    empty_seed = pd.DataFrame(columns=["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq", "Readsname", "Readsbarcode"])
     for _, seed_row in seed.iterrows():
         bp_cand_df = known_pair_to_bp_cand_df(seed_row)
         try:
@@ -1340,6 +1340,7 @@ def empty_amplicon_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         "AmpliconID",
         "Chrom1",
         "Start",
+        "Chrom2",
         "End",
         "Seg_num",
         "Length",
@@ -1349,15 +1350,16 @@ def empty_amplicon_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
         "CN_sum",
         "CN_mean",
         "CN_std",
-        "Left_CN",
-        "Right_CN",
+        "FCleft_sum",
+        "FCright_sum",
+        "invCNCV_sum",
+        "invCNCV_mean",
+        "invSplitCV",
         "Gene_num",
         "Cancergene_num",
         "SE_num",
-        "F1",
-        "F2",
-        "F3",
-        "F4",
+        "FCleft_mean_1",
+        "FCright_mean_1",
         "Score",
     ]
     return (
@@ -1563,7 +1565,8 @@ def match_bp_duo_to_known_breakpoints(
                         "Count": cand.get("Count", 0),
                         "offset": cand.get("offset", None),
                         "Seq": cand.get("Seq", None),
-                        "Readsname": cand.get("Readsname", []),
+                        "Readsname": cand.get("Readsname", cand.get("Readname", [])),
+                        "Readsbarcode": cand.get("Readsbarcode", cand.get("Readbarcode", [])),
                     }
                 )
     if not rows:
@@ -1649,7 +1652,8 @@ def compute_jcs_tables(
                 {
                     "Count": count,
                     "Seq": cand.get("Seq", ""),
-                    "Readsname": cand.get("Readsname", []),
+                    "Readsname": cand.get("Readsname", cand.get("Readname", [])),
+                    "Readsbarcode": cand.get("Readsbarcode", cand.get("Readbarcode", [])),
                     "SequenceMatch": seq_match,
                     "Chrom1": cand.get("Chrom1", ""),
                     "Coord1": cand.get("Coord1", ""),
@@ -1679,6 +1683,7 @@ def compute_jcs_tables(
                 "Validated": validated,
                 "BestSeq": best.get("Seq", ""),
                 "BestReadsname": best.get("Readsname", []),
+                "BestReadsbarcode": best.get("Readsbarcode", []),
                 "SequenceMatch": best.get("SequenceMatch", False),
                 "MatchedChrom1": best.get("Chrom1", ""),
                 "MatchedCoord1": best.get("Coord1", ""),
@@ -2001,9 +2006,14 @@ def evidence_from_targeted_bppair_matches(
         return pd.DataFrame()
     for _, row in matched_pairs.iterrows():
         readnames = list(dict.fromkeys(parse_list_cell(row.get("Readsname", []))))
+        readbarcodes = parse_list_cell(row.get("Readsbarcode", []))
+        if len(readbarcodes) < len(readnames):
+            readbarcodes.extend([None] * (len(readnames) - len(readbarcodes)))
         if not readnames:
             readnames = [None]
-        for readname in readnames:
+            readbarcodes = [None]
+        for read_idx, readname in enumerate(readnames):
+            ask_barcode = readbarcodes[read_idx] if read_idx < len(readbarcodes) else None
             rows.append(
                 {
                     "CircleID": row["CircleID"],
@@ -2021,7 +2031,7 @@ def evidence_from_targeted_bppair_matches(
                     "CancerGene": row.get("CancerGene", ""),
                     "Bam": str(bam_path),
                     "Readname": readname,
-                    "Barcode": barcode_lookup.get(readname) if barcode_lookup else None,
+                    "Barcode": ask_barcode or (barcode_lookup.get(readname) if barcode_lookup else None),
                     "support_type": "split_SA",
                     "CandidateChrom1": row["Chrom1"],
                     "CandidateCoord1": row["Coord1"],
@@ -2327,13 +2337,9 @@ def evidence_row(bp: pd.Series, readname: object, ask_barcode: object, cell_barc
     }
 
 
-def normalize_gene_label(gene_text: object, target_genes: Iterable[str] = TARGET_GENES) -> str:
-    genes = set()
-    text = "" if pd.isna(gene_text) else str(gene_text)
-    for gene in target_genes:
-        if re.search(rf"(^|[;\s,_]){re.escape(gene)}($|[;\s,_])", text):
-            genes.add(gene)
-    return "_".join(sorted(genes)) if genes else "ecDNA"
+def normalize_gene_label(gene_text: object) -> str:
+    genes = split_genes(gene_text)
+    return "_".join(sorted(set(genes))) if genes else "ecDNA"
 
 
 def make_barcode_id(row, sample_prefix: str | None = None) -> str:
@@ -2655,7 +2661,7 @@ def run_bam_search(args: argparse.Namespace) -> None:
 
 def add_bam_search_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--circular", action="append", required=True, help="sample_id[,filename]=known_ecDNA_structure.tsv")
-    parser.add_argument("--bam", required=True, help="Query BAM/CRAM indexed for random access.")
+    parser.add_argument("--bam", required=True, help="Query BAM indexed for random access.")
     parser.add_argument("--target-genes", default=None)
     parser.add_argument("--genome", default="hg38", help="Genome build for default ASK annotations, e.g. hg19, hg38, mm10.")
     parser.add_argument("--genefile", default=None, help="Optional BED12 gene annotation file.")
@@ -2698,7 +2704,7 @@ def add_bam_search_arguments(parser: argparse.ArgumentParser) -> argparse.Argume
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="ASK-search: targeted search for known ecDNA breakpoint evidence directly from a query BAM/CRAM."
+        description="ASK-search: targeted search for known ecDNA breakpoint evidence directly from a query BAM."
     )
     return add_bam_search_arguments(parser)
 

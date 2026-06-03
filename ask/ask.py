@@ -412,10 +412,10 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
     if (bp_duo.empty):
         colnames = ['Chrom', 'Start', 'End', 'Strand',
                     'SplitCount', 'CN', 'AmpliconID', 'Gene']
-        colnames1 = ['AmpliconID', 'Chrom','Start', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 
+        colnames1 = ['AmpliconID', 'Chrom1','Start', 'Chrom2', 'End', 'Seg_num', 'Length', 'SplitCount_sum', 'SplitCount_mean', 
                      'SplitCount_std', 'CN_sum', 'CN_mean', 'CN_std', 
-                     'Left_CN', 'Right_CN', 'Gene_num', 'Cancergene_num', 'SE_num',
-                     'F1','F2','F3','F4','Score']
+                     'FCleft_sum', 'FCright_sum', 'invCNCV_sum', 'invCNCV_mean', 'invSplitCV',
+                     'Gene_num', 'Cancergene_num', 'SE_num', 'FCleft_mean_1', 'FCright_mean_1', 'Score']
         circ_anno = pd.DataFrame(columns = colnames)
         line_anno = pd.DataFrame(columns = colnames)
         circ_score = pd.DataFrame(columns = colnames1)
@@ -643,10 +643,9 @@ def plot_amplicon(circ_anno, line_anno = None, cn_amp = None,
 
 
 if __name__ == '__main__':
-    datapath = '/Users/weina/Desktop/My_data/Allproject/ecDNA/ask-main/data'
-    resultpath = '/cluster/home/WeiNa/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
-    # resultpath = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/Newresult/ask2_chr78_nm1_se0/ask2_chr78'
-    resfigpath = '/cluster/home/WeiNa/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
+    datapath = '/Users/weina/ask-main/data'
+    resultpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
+    resfigpath = '/Users/weina/project/ecDNA/ask_run/test_result/GBM39_chr8_all_ask2'
     from pathlib import Path
     import os
     import time
@@ -795,7 +794,6 @@ if __name__ == '__main__':
         way = 'ask')
 
     # output results
-    # bp_cand_all.to_csv(output_bpcand, sep='\t', index=False)
     bp_duo.to_csv(output_bpduo, sep='\t', index=False)
 
     # save pdat
@@ -823,11 +821,7 @@ if __name__ == '__main__':
     line_anno.to_csv(output_line, sep='\t', index=False)
     bp_pair.to_csv(output_bppair, sep='\t', index=False)
     seg.to_csv(output_seg, sep='\t', index=False)
-    ## output breakpoint pair alignment for all bp in bp_duo
-    # output_bppair_alignment(bp_duo, bamfile, output_align)
 
-    # output breakpoint pair alignment
-    # output_bppair_alignment(bp_pair, bamfile, output_align)
 
     # save pdat
     pdat = [circ_anno, line_anno, bp_pair, seg]
@@ -838,11 +832,6 @@ if __name__ == '__main__':
     print('construct amplicons - done \
         - {0:0.1f} seconds\n'.format(time.time() - startTime))
 
-    #-------------------------------------------------------------------------#
-    # step 4': get stats
-    #-------------------------------------------------------------------------#
-    # circ_stat = score_circ(circ_anno, bin_norm, binsize = 10000)
-    # circ_stat.to_csv(output_circ_stat, sep='\t', index=False)
 
     #--------------------------------------------------------------------------#
     # step 5 : plot amplicons

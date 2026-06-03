@@ -19,6 +19,13 @@ import logger
 
 logg = logger.Logger()
 #------------------------------------------------------------------------------#
+def get_read_barcode(read, tags=("CB", "CR", "BX", "BC")):
+    for tag in tags:
+        if read.has_tag(tag):
+            return read.get_tag(tag)
+    return None
+
+#------------------------------------------------------------------------------#
 def check_read_clip(read, clip_type = 'soft_left', seq = False):
     """
     true if the read is the clip read
@@ -61,7 +68,7 @@ def rev_compl(seq):
 # main function to joint any two breakpoints
 #------------------------------------------------------------------------------#
 def join_breakpoint(bamfile, a, b, rm_clipped_name = None, min_nt = 2, seq_len = 200, \
-    offset = 0, match_method = 'fuzzy_match'):
+    offset = 0, match_method = 'fuzzy_match', rm_clipped_barcode = None):
     """
     detect whether the two breakpoints are joined in the genome
 
@@ -87,41 +94,36 @@ def join_breakpoint(bamfile, a, b, rm_clipped_name = None, min_nt = 2, seq_len =
 
     if (a[2] == 'L'):
         
-        a_seq, a_clipped, a_clipped_name = left_clip(bamfile, a, seq_len)
+        a_seq, a_clipped, a_clipped_name, a_clipped_barcode = left_clip(bamfile, a, seq_len)
     else:
-        a_seq, a_clipped, a_clipped_name = right_clip(bamfile, a, seq_len)
+        a_seq, a_clipped, a_clipped_name, a_clipped_barcode = right_clip(bamfile, a, seq_len)
 
     if (b[2] == 'L'):
-        b_seq, b_clipped, b_clipped_name = left_clip(bamfile, b, seq_len)
+        b_seq, b_clipped, b_clipped_name, b_clipped_barcode = left_clip(bamfile, b, seq_len)
     else:
-        b_seq, b_clipped, b_clipped_name = right_clip(bamfile, b, seq_len)
+        b_seq, b_clipped, b_clipped_name, b_clipped_barcode = right_clip(bamfile, b, seq_len)
     # with open('/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_1113/ask3_both_knn3_mr10_GBM39_1113_nofilter_circ/reads_55222714.txt', 'a') as f:
     #     f.write(f'{a}\t{b}\t{a_clipped_name}\t{b_clipped_name}\n')
     # remove too short reads
     if (min_nt > 0):
-        if rm_clipped_name:
-            def filter_clipped(clipped, clipped_name, min_nt):
-                clipped_ = []
-                clipped_name_ = []
-                for i, read in enumerate(clipped):
-                    if (len(read) >= min_nt):
-                        clipped_.append(read)
-                        clipped_name_.append(clipped_name[i])
-                return clipped_, clipped_name_
-            a_clipped, a_clipped_name = filter_clipped(a_clipped, a_clipped_name, min_nt)
-            b_clipped, b_clipped_name = filter_clipped(b_clipped, b_clipped_name, min_nt)
-        else:
-            a_clipped = [i for i in a_clipped if len(i) >= min_nt]
-            b_clipped = [i for i in b_clipped if len(i) >= min_nt]
-            # a_clipped_name = [a_clipped_name[i] for i in range(len(a_clipped)) \
-            #                   if len(a_clipped[i]) >= min_nt]
-            # b_clipped_name = [b_clipped_name[i] for i in range(len(b_clipped)) \
-            #             if len(b_clipped[i]) >= min_nt]
-    
-    if rm_clipped_name:
-        def filter_clip_by_bpp(rm_clipped_name, clipped_name, clipped):
+        def filter_clipped(clipped, clipped_name, clipped_barcode, min_nt):
             clipped_ = []
             clipped_name_ = []
+            clipped_barcode_ = []
+            for i, read in enumerate(clipped):
+                if (len(read) >= min_nt):
+                    clipped_.append(read)
+                    clipped_name_.append(clipped_name[i])
+                    clipped_barcode_.append(clipped_barcode[i])
+            return clipped_, clipped_name_, clipped_barcode_
+        a_clipped, a_clipped_name, a_clipped_barcode = filter_clipped(a_clipped, a_clipped_name, a_clipped_barcode, min_nt)
+        b_clipped, b_clipped_name, b_clipped_barcode = filter_clipped(b_clipped, b_clipped_name, b_clipped_barcode, min_nt)
+    
+    if rm_clipped_name:
+        def filter_clip_by_bpp(rm_clipped_name, clipped_name, clipped, clipped_barcode):
+            clipped_ = []
+            clipped_name_ = []
+            clipped_barcode_ = []
             num = 0
             for i, name in enumerate(clipped_name):
                 if name in rm_clipped_name:
@@ -129,10 +131,11 @@ def join_breakpoint(bamfile, a, b, rm_clipped_name = None, min_nt = 2, seq_len =
                 else:
                     clipped_.append(clipped[i])    
                     clipped_name_.append(name)
-            return clipped_, clipped_name_, num
+                    clipped_barcode_.append(clipped_barcode[i])
+            return clipped_, clipped_name_, num, clipped_barcode_
         #  remove the clip read that exists in bp pairs from bamfile
-        a_clipped, a_clipped_name, num1 = filter_clip_by_bpp(rm_clipped_name, a_clipped_name, a_clipped)
-        b_clipped, b_clipped_name, num2 = filter_clip_by_bpp(rm_clipped_name, b_clipped_name, b_clipped)
+        a_clipped, a_clipped_name, num1, a_clipped_barcode = filter_clip_by_bpp(rm_clipped_name, a_clipped_name, a_clipped, a_clipped_barcode)
+        b_clipped, b_clipped_name, num2, b_clipped_barcode = filter_clip_by_bpp(rm_clipped_name, b_clipped_name, b_clipped, b_clipped_barcode)
     else:
         num1 = 0
         num2 = 0
@@ -161,14 +164,18 @@ def join_breakpoint(bamfile, a, b, rm_clipped_name = None, min_nt = 2, seq_len =
         b2a = partial_match(_b2a[0], _b2a[1], num2, min_nt = min_nt)
         a2b = partial_match(_a2b[0], _a2b[1], num1, min_nt = min_nt)
     elif (match_method == 'fuzzy_match'):
-        b2a = fuzzy_match(_b2a[0], _b2a[1], num2, offset = offset, min_nt = min_nt)
-        a2b = fuzzy_match(_a2b[0], _a2b[1], num1, offset = offset, min_nt = min_nt)
+        b2a = fuzzy_match(_b2a[0], _b2a[1], num2, offset = offset, min_nt = min_nt,
+                          clipped_name = b_clipped_name, rm_clipped_name = rm_clipped_name,
+                          clipped_barcode = b_clipped_barcode, rm_clipped_barcode = rm_clipped_barcode)
+        a2b = fuzzy_match(_a2b[0], _a2b[1], num1, offset = offset, min_nt = min_nt,
+                          clipped_name = a_clipped_name, rm_clipped_name = rm_clipped_name,
+                          clipped_barcode = a_clipped_barcode, rm_clipped_barcode = rm_clipped_barcode)
     else:
         raise(Exception("Invalid method"))
 
     return [b2a, a2b]
 #------------------------------------------------------------------------------#
-def left_clip(bamfile, l, seq_len):   # ************change
+def left_clip(bamfile, l, seq_len):  
     # get the clip read for breakpoint 
     with pysam.AlignmentFile(bamfile, "rb") as bamf:
         l_read = [
@@ -184,11 +191,12 @@ def left_clip(bamfile, l, seq_len):   # ************change
                  for read in l_read]
     
     l_clipped_name = [read.query_name for read in l_read]
+    l_clipped_barcode = [get_read_barcode(read) for read in l_read]
 
-    return [l_seq, l_clipped, l_clipped_name]
+    return [l_seq, l_clipped, l_clipped_name, l_clipped_barcode]
 
 #------------------------------------------------------------------------------#
-def right_clip(bamfile, r, seq_len):   # ************change
+def right_clip(bamfile, r, seq_len):  
     # get the clip read for the breakpoint
     with pysam.AlignmentFile(bamfile, "rb") as bamf:
         r_read = [
@@ -206,8 +214,9 @@ def right_clip(bamfile, r, seq_len):   # ************change
     r_clipped = [read.query_sequence[read.query_alignment_end:]
                  for read in r_read]
     r_clipped_name = [read.query_name for read in r_read]
+    r_clipped_barcode = [get_read_barcode(read) for read in r_read]
 
-    return [r_seq, r_clipped, r_clipped_name]
+    return [r_seq, r_clipped, r_clipped_name, r_clipped_barcode]
 
 #------------------------------------------------------------------------------#
 def L2R(l_clipped, r_seq):
@@ -290,25 +299,36 @@ def partial_match(_clipped, _seq, num = 0, min_nt = 2):
         return (0, 0)
 
 #------------------------------------------------------------------------------#
-def fuzzy_match(_clipped, _seq, num = 0, offset = 0, min_nt = 2, error_rate = 0.1):
+def fuzzy_match(_clipped, _seq, num = 0, offset = 0, min_nt = 2, error_rate = 0.1,
+                clipped_name = None, rm_clipped_name = None,
+                clipped_barcode = None, rm_clipped_barcode = None):
     """fuzzy match between clipped reads and breakend sequence
     use levenshtein distance to search complete sequence in _clipped
     that match part of _seq from start with error rate of 10%
 
     """
     match_start = 0
+    clipped_name = clipped_name if clipped_name is not None else [None] * len(_clipped)
+    clipped_barcode = clipped_barcode if clipped_barcode is not None else [None] * len(_clipped)
     if (offset > 0): # offset > 0 no overlap
-        m = [levenshtein_distance(_x[offset:], _seq)
-             for _x in _clipped if (len(_x) > offset) and (len(_x) >= min_nt)]
+        keep = [(index, _x) for index, _x in enumerate(_clipped) if (len(_x) > offset) and (len(_x) >= min_nt)]
+        m = [levenshtein_distance(_x[offset:], _seq) for _, _x in keep]
     else:
         match_start = -offset
         _sub_seq = _seq[match_start:]
-        m = [levenshtein_distance(_x, _sub_seq)
-             for _x in _clipped if (len(_x) >= min_nt)]
-    if num > 0:
-        return (match_start, sum(np.array(m) <= error_rate) + num)
-    else:
-        return (match_start, sum(np.array(m) <= error_rate))
+        keep = [(index, _x) for index, _x in enumerate(_clipped) if (len(_x) >= min_nt)]
+        m = [levenshtein_distance(_x, _sub_seq) for _, _x in keep]
+
+    matched_index = [keep[index][0] for index, m_ in enumerate(m) if (m_ <= error_rate)]
+    matched_name = [clipped_name[index] for index in matched_index]
+    matched_barcode = [clipped_barcode[index] for index in matched_index]
+    if num > 0 and rm_clipped_name:
+        matched_name.extend(rm_clipped_name)
+        if rm_clipped_barcode is None:
+            matched_barcode.extend([None] * len(rm_clipped_name))
+        else:
+            matched_barcode.extend(rm_clipped_barcode)
+    return (match_start, sum(np.array(m) <= error_rate) + num, matched_name, matched_barcode)
 
 #------------------------------------------------------------------------------#
 def levenshtein_distance(str1, str2, rate = True, _sub = 1, _del = 1, _ins = 1):
@@ -422,14 +442,14 @@ def breakpoint_assemble(bamfile, a, seq_len = 50):
     assemble sequence arround clipped breakpoint
     """
     if (a[2] == 'L'):
-        a_seq, a_clipped, a_clipped_name = left_clip(bamfile, a, seq_len)
+        a_seq, a_clipped, a_clipped_name, _ = left_clip(bamfile, a, seq_len)
         if (a_clipped != []):
             # a_asmb = ''
             a_asmb = consensus_from_listofseq(a_clipped, a[2]) + a_seq
         else:
             a_asmb = ''
     else:
-        a_seq, a_clipped, a_clipped_name = right_clip(bamfile, a, seq_len)
+        a_seq, a_clipped, a_clipped_name, _ = right_clip(bamfile, a, seq_len)
         if (a_clipped != []):
             # a_asmb = ''
             a_asmb = a_seq + consensus_from_listofseq(a_clipped, a[2])
@@ -577,6 +597,22 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
     
     # # example of element of bplist： ('chr7', 54817063, 'L')
     # bplist = [x[1:4] for x in bp_cand_df_sorted.itertuples()]
+    def as_list(value):
+        if isinstance(value, list):
+            return value
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return []
+        return [value]
+
+    if not bp_duo_bam.empty and 'Readsbarcode' not in bp_duo_bam.columns:
+        bp_duo_bam = bp_duo_bam.copy()
+        if 'Readsname' in bp_duo_bam.columns:
+            bp_duo_bam['Readsbarcode'] = [
+                [None] * len(as_list(readnames)) for readnames in bp_duo_bam['Readsname']
+            ]
+        else:
+            bp_duo_bam['Readsbarcode'] = [[] for _ in range(bp_duo_bam.shape[0])]
+
     if bp_duo_bam.shape[0] > 10000:
         multi_process = True
         num_cores = 20
@@ -601,24 +637,48 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
     # note: counting use a different (longer) seq_len parameter
     # to ensure the reads are fully coverred in the breakend
     def run_join_breakpoint(bamfile, match_method, type, t1, row):
+        def read_names_and_barcodes(match):
+            if len(match) > 3:
+                return match[2], match[3]
+            return [], []
+
         if type == 1:
             # logg.info(f'bpduo: {row[0:6]} of {len(t1)}')
             bp_count = tuple(join_breakpoint(bamfile, row[0:3], row[3:6], rm_clipped_name = None, \
                     offset = row[7], match_method = match_method))
             if bp_count[0][1] > 0 and bp_count[1][1] > 0 and bp_count[0][0] == bp_count[1][0]:
                 sum_count = bp_count[0][1] + bp_count[1][1]
-                t1.append(list(row[0:6] + (sum_count,) + row[7:]))
+                names1, barcodes1 = read_names_and_barcodes(bp_count[0])
+                names2, barcodes2 = read_names_and_barcodes(bp_count[1])
+                tmp = list(row[0:6] + (sum_count,) + row[7:])
+                tmp.append(names1 + names2)
+                tmp.append(barcodes1 + barcodes2)
+                t1.append(tmp)
             return t1
         else: 
             # logg.info(f'bpduobam: {row[1:7]} of {len(t1)}')
-       
-            bp_count = join_breakpoint(bamfile, row[1:4], row[4:7], rm_clipped_name = row[-1], \
-                    offset = row[8], match_method = match_method)
+            rm_clipped_name = as_list(getattr(row, 'Readsname', []))
+            rm_clipped_barcode = as_list(getattr(row, 'Readsbarcode', []))
+            bp_count = join_breakpoint(
+                bamfile,
+                (row.Chrom1, row.Coord1, row.Clip1),
+                (row.Chrom2, row.Coord2, row.Clip2),
+                rm_clipped_name = rm_clipped_name,
+                offset = row.offset,
+                match_method = match_method,
+                rm_clipped_barcode = rm_clipped_barcode,
+            )
             if bp_count[0][0] == bp_count[1][0]:
                 sum_count = bp_count[0][1] + bp_count[1][1]
-                if sum_count < row[7]:  # raw count bp_pair
-                    sum_count = row[7]
-                t1.append(list(row[1:4] + row[4:7] + (sum_count,) + row[8:10]))   
+                if sum_count < row.Count:  # raw count bp_pair
+                    sum_count = row.Count
+                tmp = [
+                    row.Chrom1, row.Coord1, row.Clip1,
+                    row.Chrom2, row.Coord2, row.Clip2,
+                    sum_count, row.offset, row.Seq,
+                    rm_clipped_name, rm_clipped_barcode,
+                ]
+                t1.append(tmp)   
             return t1
     
     if multi_process:
@@ -648,7 +708,7 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
                 tmp += 1
 
     colnames = ["Chrom1", "Coord1", "Clip1",
-                "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq']
+                "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq', 'Readname', 'Readbarcode']
 
     bp_pair_df = pd.DataFrame(t1, columns = colnames).reset_index(drop=True)
     if bp_pair_df.shape[0] > 1:
@@ -830,12 +890,13 @@ def get_bppair_peread(bamfile, bp_cand_df, \
             abs(bplist[i][1] - bplist[j][1]) < seq_len):
             isc = 0
         else:
-            isc = len(misc.intersect(bplist[i][3], bplist[j][3]))
+            readname = misc.intersect(bplist[i][3], bplist[j][3])
+            isc = len(readname)
 
         if (isc >= min_reads):
-            op.append(bplist[i][0:3] + bplist[j][0:3] + [isc, 0, 'PE_Support'])
+            op.append(bplist[i][0:3] + bplist[j][0:3] + [isc, 0, 'PE_Support', readname, [None] * len(readname)])
     colnames = ["Chrom1", "Coord1", "Clip1",
-                "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq']
+                "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq', 'Readname', 'Readbarcode']
     bp_pair_df = pd.DataFrame(op, columns = colnames)
 
     return bp_pair_df.sort_values(

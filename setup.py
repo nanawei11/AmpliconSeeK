@@ -20,7 +20,7 @@ NAME = "ask-ecdna"
 EMAIL = "nanawei11@163.com"
 URL = "https://github.com/nanawei11/AmpliconSeeK/"
 AUTHOR = "Nana Wei"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 setup(
     name=NAME,

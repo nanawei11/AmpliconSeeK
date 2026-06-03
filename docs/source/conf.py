@@ -1,7 +1,7 @@
 project = "AmpliconSeeK"
 copyright = "2026, Weina"
 author = "Weina"
-release = "0.1.0"
+release = "0.1.1"
 
 extensions = []
 templates_path = ["_templates"]

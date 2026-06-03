@@ -2,7 +2,7 @@
 
 AmpliconSeeK (ASK) is a Python toolkit for detecting and reconstructing amplified genomic structures and candidate extrachromosomal DNA (ecDNA) from indexed alignment files, supporting both de novo discovery and targeted search of known ecDNA structures.
 
-**Current version:** `0.1.0`
+**Current version:** `0.1.1`
 
 ## Table of Contents
 
@@ -297,7 +297,6 @@ ask-search \
   --circular query_sample=exampledata/testdata/samplename_ask_amplicon_circular.tsv \
   --bam exampledata/testdata.bam \
   --genome hg38 \
-  --target-genes EGFR,MDM4,PDGFRA \
   --min-junc-cnt 5 \
   -o exampledata/testdata_search/testdata_search 
 ```
@@ -330,7 +329,7 @@ python ask/ecDNA_search.py \
 | Parameter           | Required | Default             | Description                                                               |
 | ------------------- | -------- | ------------------- | ------------------------------------------------------------------------- |
 | `--circular`        | Yes      | -                   | Known ecDNA structure in`sample_id=known_ecDNA.tsv` format                |
-| `--bam`             | Yes      | -                   | Query BAM/CRAM file                                                       |
+| `--bam`             | Yes      | -                   | Query BAM file                                                            |
 | `-o`, `--outdir`    | Yes      | -                   | Output directory                                                          |
 | `--outprefix`       | No       | `outdir/<bam-stem>` | ASK-style output prefix                                                   |
 | `--genome`          | No       | `hg38`              | Genome build for default annotation files                                 |
@@ -474,7 +473,7 @@ By default, a reference junction is considered validated when it has at least fi
 
 ASK reconstructs amplified structures from coverage and breakpoint evidence:
 
-1. Alignment evidence extraction from an indexed BAM/CRAM.
+1. Alignment evidence extraction from an indexed BAM.
 2. Read counting in genomic bins.
 3. Copy number normalization and segmentation.
 4. Amplified segment detection.
@@ -505,7 +504,7 @@ ASK can also be used modularly:
 
 | Use Case                                   | Suggested Entry Point                                                 |
 | ------------------------------------------ | --------------------------------------------------------------------- |
-| Start from BAM/CRAM                        | `ask`                                                                 |
+| Start from BAM                             | `ask`                                                                 |
 | Start from known ecDNA structure           | `ask-search`                                                          |
 | Compare one reference ecDNA across samples | Run`ask-search` once per query BAM                                    |
 | Replot existing ASK outputs                | Use the generated circular, linear, copy number, and bin-count tables |

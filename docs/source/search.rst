@@ -24,7 +24,6 @@ Then use that circular amplicon table as the known structure:
      --circular query_sample=exampledata/testdata_ask_amplicon_circular_new.tsv \
      --bam exampledata/testdata.bam \
      --genome hg38 \
-     --target-genes EGFR,MDM4,PDGFRA \
      --min-junc-cnt 5 \
      -o exampledata/testdata_search \
      --outprefix exampledata/testdata_search/testdata_search
