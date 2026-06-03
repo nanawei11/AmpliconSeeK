@@ -2,9 +2,7 @@
 
 AmpliconSeeK (ASK) is a Python toolkit for detecting and reconstructing amplified genomic structures and candidate extrachromosomal DNA (ecDNA) from indexed alignment files, supporting both de novo discovery and targeted search of known ecDNA structures.
 
-**Latest Release:**
-
-* Github: v3
+**Current version:** `0.1.0`
 
 ## Table of Contents
 
