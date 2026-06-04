@@ -1,11 +1,12 @@
 Installation
 ============
 
+ASK can be installed from PyPI or from the GitHub source tree. A Conda
+environment is recommended because ASK depends on common scientific Python and
+bioinformatics packages.
+
 Create a Conda environment
 --------------------------
-
-Install Miniconda by following the official Conda instructions, then configure
-the common bioinformatics channels:
 
 .. code-block:: bash
 
@@ -13,21 +14,30 @@ the common bioinformatics channels:
    conda config --add channels bioconda
    conda config --add channels conda-forge
 
-Create and activate an environment for ASK:
-
-.. code-block:: bash
-
    conda create -n ask --no-channel-priority \
      pysam pandas numpy matplotlib statsmodels seaborn scipy scikit-learn
    conda activate ask
 
-Install ASK from the repository root:
+Install from PyPI
+-----------------
 
 .. code-block:: bash
 
+   pip install ask-ecdna
+
+Install from GitHub
+-------------------
+
+Use this option if you want the latest development version:
+
+.. code-block:: bash
+
+   git clone https://github.com/nanawei11/AmpliconSeeK.git
+   cd AmpliconSeeK
    pip install .
 
-Check the command line entry points:
+Check the installation
+----------------------
 
 .. code-block:: bash
 
@@ -37,13 +47,12 @@ Check the command line entry points:
 Required input
 --------------
 
-ASK expects a sorted BAM file and an index file in the same directory:
+ASK expects a coordinate-sorted BAM file and its index:
 
 .. code-block:: text
 
    sample.bam
    sample.bam.bai
 
-The BAM should be aligned to the same genome build selected with ``-g`` or
-``--genome``. The bundled annotation files currently support ``hg19`` and
-``hg38``.
+The BAM genome build must match the ``-g`` or ``--genome`` option. The
+bundled annotation files support ``hg19`` and ``hg38``.

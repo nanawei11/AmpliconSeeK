@@ -1,8 +1,13 @@
 Command line reference
 ======================
 
-De novo detection
------------------
+This page lists the most commonly used options. Run ``ask --help`` or
+``ask-search --help`` for the full command-line help.
+
+``ask``
+-------
+
+Basic usage:
 
 .. code-block:: bash
 
@@ -18,63 +23,58 @@ Core options:
      - Description
    * - ``-i, --bamfile``
      - required
-     - Input BAM file.
+     - Input sorted BAM file.
    * - ``-o, --outprefix``
-     - input BAM prefix
+     - input prefix
      - Output prefix.
    * - ``-g, --genome``
      - ``hg38``
      - Genome build, usually ``hg19`` or ``hg38``.
    * - ``-w, --binsize``
      - ``10000``
-     - Bin size for copy number estimation.
+     - Bin size for copy-number estimation.
+   * - ``-d, --segmode``
+     - ``standard``
+     - Input data mode: ``standard`` or ``bias``.
    * - ``-k, --mapq``
      - ``20``
      - Minimum mapping quality.
    * - ``-l, --nmmax``
      - ``1``
-     - Maximum NM mismatches.
+     - Maximum NM mismatch count.
    * - ``-c, --mincn``
      - ``5``
      - Minimum copy number for amplified segments.
-   * - ``-d, --segmode``
-     - ``standard``
-     - Segmentation mode: ``standard`` or ``bias``.
    * - ``-n, --bpcount``
      - ``5``
      - Minimum clipped reads for candidate breakpoints.
    * - ``-m, --juncread``
      - ``10``
      - Minimum reads for breakpoint pairs.
-   * - ``--SA_with_nm``
-     - ``False``
-     - Use NM mismatch values when filtering supplementary alignments.
    * - ``--subseg``
      - ``False``
      - Infer sub-segments within amplified regions.
-   * - ``--method``
-     - ``both``
-     - Breakpoint-pair strategy.
-   * - ``--knn``
-     - ``3``
-     - Neighbor parameter used in segment graph construction.
+   * - ``--SA_with_nm``
+     - ``False``
+     - Use NM mismatch values when filtering supplementary alignments.
    * - ``--run_from_pdat``
      - ``0``
      - Resume from saved intermediate ``.pdat`` files.
 
-Targeted search
----------------
+``ask-search``
+--------------
+
+Basic usage:
 
 .. code-block:: bash
 
    ask-search \
      --circular query_sample=known_ecDNA.tsv \
-     --bam sample.bam \
-     --genome hg38 \
+     --bam query_sample.bam \
      -o search_out \
-     --outprefix search_out/sample_search
+     --outprefix search_out/query_sample_search
 
-Common options:
+Core options:
 
 .. list-table::
    :header-rows: 1
@@ -88,27 +88,30 @@ Common options:
    * - ``--bam``
      - required
      - Query BAM file.
+   * - ``-o, --outdir``
+     - required
+     - Output directory.
+   * - ``--outprefix``
+     - ``outdir/<bam-stem>``
+     - ASK-style output prefix.
    * - ``--genome``
      - ``hg38``
-     - Genome build for default annotation files.
+     - Genome build for bundled annotation files.
    * - ``--window``
      - ``200``
-     - Window around known breakpoints for targeted evidence collection.
+     - Breakpoint-neighborhood search window.
    * - ``--mapq``
      - ``20``
      - Minimum mapping quality.
    * - ``--nmmax``
      - ``1``
-     - Maximum NM mismatches.
+     - Maximum NM mismatch count.
    * - ``--min-junc-cnt``
-     - ``5``
-     - Minimum junction support count.
-   * - ``--bpp-min-dist``
-     - ``50``
-     - Minimum distance between breakpoint-pair positions.
-   * - ``--jcs-threshold``
-     - ``0.5``
-     - JCS threshold for detection.
+     - ``1``
+     - Minimum junction read count for circular reconstruction.
    * - ``--jcs-min-support``
      - ``5``
-     - Minimum supporting reads for a validated junction.
+     - Minimum reads required to validate one reference junction.
+   * - ``--min-jcs``
+     - ``0.5``
+     - Circle-level JCS detection threshold.

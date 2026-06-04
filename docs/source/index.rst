@@ -1,20 +1,42 @@
 AmpliconSeeK documentation
 ==========================
 
-AmpliconSeeK (ASK) is a Python toolkit for detecting amplified genomic
-structures and candidate extrachromosomal DNA (ecDNA) from indexed alignment
-files. ASK supports de novo amplicon discovery and targeted search of known
-ecDNA structures in new BAM files.
+AmpliconSeeK (ASK) detects amplified genomic regions, breakpoint-pair
+evidence, and candidate extrachromosomal DNA (ecDNA) structures from indexed
+alignment files. ASK supports both de novo discovery and targeted search of
+known ecDNA structures across samples.
 
-The main workflows are:
+ASK provides two command-line workflows:
 
-* ``ask``: de novo detection from a sorted and indexed BAM file.
-* ``ask-search``: targeted evidence search using a known ecDNA structure.
+.. list-table::
+   :header-rows: 1
+
+   * - Workflow
+     - Command
+     - Use case
+   * - De novo detection
+     - ``ask``
+     - Start from a sorted, indexed BAM file and reconstruct candidate
+       circular or linear amplicons.
+   * - Targeted search
+     - ``ask-search``
+     - Test whether a known ecDNA structure is supported in another BAM
+       file.
+
+Quick links
+-----------
+
+* Install ASK: :doc:`installation`
+* Run the example data: :doc:`quickstart`
+* Search a known ecDNA structure: :doc:`search`
+* Interpret output files: :doc:`outputs`
+* Check command-line options: :doc:`cli_reference`
 
 .. toctree::
    :maxdepth: 2
    :caption: User guide
 
+   overview
    installation
    quickstart
    search
@@ -26,4 +48,3 @@ The main workflows are:
 
    cli_reference
    algorithm
-   faq
