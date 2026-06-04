@@ -1,0 +1,231 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quick start &mdash; AmpliconSeeK 0.1.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=a58bc63e"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Targeted ecDNA search" href="search.html" />
+    <link rel="prev" title="Installation" href="installation.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            AmpliconSeeK
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Quick start</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#get-the-example-data">Get the example data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#run-the-example-bam">Run the example BAM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#run-your-own-bam">Run your own BAM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#choose-segmentation-mode">Choose segmentation mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#prepare-a-bam-from-fastq">Prepare a BAM from FASTQ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#checklist">Checklist</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="search.html">Search Page</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output files</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="cli_reference.html">Command line reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="algorithm.html">Algorithm overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">AmpliconSeeK</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Quick start</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/quickstart.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="quick-start">
+<h1>Quick start<a class="headerlink" href="#quick-start" title="Link to this heading"></a></h1>
+<p>This page shows the shortest path from an indexed BAM file to ASK output.</p>
+<section id="get-the-example-data">
+<h2>Get the example data<a class="headerlink" href="#get-the-example-data" title="Link to this heading"></a></h2>
+<p>The example BAM file, <code class="docutils literal notranslate"><span class="pre">exampledata/testdata.bam</span></code>, is available in the
+AmpliconSeeK GitHub repository:</p>
+<p><a class="reference external" href="https://github.com/nanawei11/AmpliconSeeK/tree/main/exampledata">https://github.com/nanawei11/AmpliconSeeK/tree/main/exampledata</a></p>
+<p>If you clone the repository, the example data are already in the expected
+location:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/nanawei11/AmpliconSeeK.git
+<span class="nb">cd</span><span class="w"> </span>AmpliconSeeK
+</pre></div>
+</div>
+</section>
+<section id="run-the-example-bam">
+<h2>Run the example BAM<a class="headerlink" href="#run-the-example-bam" title="Link to this heading"></a></h2>
+<p>From the repository root:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ask<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-i<span class="w"> </span>exampledata/testdata.bam<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span>exampledata/testdata/samplename<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-g<span class="w"> </span>hg38<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subseg<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--juncread<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--SA_with_nm
+</pre></div>
+</div>
+<p>The main output files are written with the prefix
+<code class="docutils literal notranslate"><span class="pre">exampledata/testdata/samplename_ask</span></code>.</p>
+</section>
+<section id="run-your-own-bam">
+<h2>Run your own BAM<a class="headerlink" href="#run-your-own-bam" title="Link to this heading"></a></h2>
+<p>For WGS or other whole-genome-like data:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ask<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-i<span class="w"> </span>sample.bam<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span>results/sample<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-g<span class="w"> </span>hg38<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subseg<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--juncread<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--SA_with_nm
+</pre></div>
+</div>
+<p>For coverage-biased assays such as ATAC-seq, scATAC-seq, ChIP-seq, WES,
+MNase-seq, or target-capture sequencing, use <code class="docutils literal notranslate"><span class="pre">-d</span> <span class="pre">bias</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ask<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-i<span class="w"> </span>sample.bam<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span>results/sample<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-g<span class="w"> </span>hg38<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span>bias<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--subseg<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--juncread<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--SA_with_nm
+</pre></div>
+</div>
+</section>
+<section id="choose-segmentation-mode">
+<h2>Choose segmentation mode<a class="headerlink" href="#choose-segmentation-mode" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">-d/--segmode</span></code> tells ASK what type of coverage profile to expect.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Mode</p></th>
+<th class="head"><p>Recommended data</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">standard</span></code></p></td>
+<td><p>WGS and low-bias whole-genome-like data. This is the default.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">bias</span></code></p></td>
+<td><p>ATAC-seq, scATAC-seq, ChIP-seq, WES, MNase-seq, and target-capture
+sequencing.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="prepare-a-bam-from-fastq">
+<h2>Prepare a BAM from FASTQ<a class="headerlink" href="#prepare-a-bam-from-fastq" title="Link to this heading"></a></h2>
+<p>Paired-end FASTQ:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bwa<span class="w"> </span>mem<span class="w"> </span>-t<span class="w"> </span><span class="m">5</span><span class="w"> </span>&lt;bwa_index&gt;<span class="w"> </span>test_R1.fastq.gz<span class="w"> </span>test_R2.fastq.gz<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>samtools<span class="w"> </span>view<span class="w"> </span>-Shb<span class="w"> </span>-<span class="w"> </span>&gt;<span class="w"> </span>test_unsorted.bam
+</pre></div>
+</div>
+<p>Single-end FASTQ:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bwa<span class="w"> </span>mem<span class="w"> </span>-t<span class="w"> </span><span class="m">5</span><span class="w"> </span>&lt;bwa_index&gt;<span class="w"> </span>test.fastq.gz<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>samtools<span class="w"> </span>view<span class="w"> </span>-Shb<span class="w"> </span>-<span class="w"> </span>&gt;<span class="w"> </span>test_unsorted.bam
+</pre></div>
+</div>
+<p>Sort, mark duplicates, and index:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>samtools<span class="w"> </span>fixmate<span class="w"> </span>--threads<span class="w"> </span><span class="m">5</span><span class="w"> </span>-m<span class="w"> </span>test_unsorted.bam<span class="w"> </span>-<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>samtools<span class="w"> </span>sort<span class="w"> </span>--threads<span class="w"> </span><span class="m">5</span><span class="w"> </span>-T<span class="w"> </span>./<span class="w"> </span>-<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>samtools<span class="w"> </span>markdup<span class="w"> </span>--threads<span class="w"> </span><span class="m">5</span><span class="w"> </span>-T<span class="w"> </span>./<span class="w"> </span>-S<span class="w"> </span>-s<span class="w"> </span>-<span class="w"> </span>test.bam
+
+samtools<span class="w"> </span>index<span class="w"> </span>test.bam
+</pre></div>
+</div>
+</section>
+<section id="checklist">
+<h2>Checklist<a class="headerlink" href="#checklist" title="Link to this heading"></a></h2>
+<p>Before running ASK, confirm that:</p>
+<ul class="simple">
+<li><p>The BAM file is coordinate sorted.</p></li>
+<li><p>The BAM index exists.</p></li>
+<li><p>The genome build matches <code class="docutils literal notranslate"><span class="pre">-g</span> <span class="pre">hg19</span></code> or <code class="docutils literal notranslate"><span class="pre">-g</span> <span class="pre">hg38</span></code>.</p></li>
+<li><p>Soft-clipped reads and SA tags were not removed during preprocessing.</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="installation.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="search.html" class="btn btn-neutral float-right" title="Targeted ecDNA search" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Weina.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
