@@ -1,5 +1,5 @@
 project = "AmpliconSeeK"
-copyright = "2026, Weina"
+copyright = "2026, Wulab"
 author = "Weina"
 release = "0.1.1"
 
