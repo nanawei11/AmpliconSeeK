@@ -15,8 +15,6 @@ dist/
 # Jupyter
 .ipynb_checkpoints/
 
-# Sphinx generated docs
-docs/build/
 
 # ASK run outputs
 *_ask_plot/
