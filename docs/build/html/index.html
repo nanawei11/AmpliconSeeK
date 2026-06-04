@@ -1,0 +1,206 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AmpliconSeeK documentation &mdash; AmpliconSeeK 0.1.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=a58bc63e"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Overview" href="overview.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="#" class="icon icon-home">
+            AmpliconSeeK
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="search.html">Search Page</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output files</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="cli_reference.html">Command line reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="algorithm.html">Algorithm overview</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="#">AmpliconSeeK</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">AmpliconSeeK documentation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ampliconseek-documentation">
+<h1>AmpliconSeeK documentation<a class="headerlink" href="#ampliconseek-documentation" title="Link to this heading"></a></h1>
+<p>AmpliconSeeK (ASK) detects amplified genomic regions, breakpoint-pair
+evidence, and candidate extrachromosomal DNA (ecDNA) structures from indexed
+alignment files. ASK supports both de novo discovery and targeted search of
+known ecDNA structures across samples.</p>
+<p>ASK provides two command-line workflows:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Workflow</p></th>
+<th class="head"><p>Command</p></th>
+<th class="head"><p>Use case</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>De novo detection</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ask</span></code></p></td>
+<td><p>Start from a sorted, indexed BAM file and reconstruct candidate
+circular or linear amplicons.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Targeted search</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ask-search</span></code></p></td>
+<td><p>Test whether a known ecDNA structure is supported in another BAM
+file.</p></td>
+</tr>
+</tbody>
+</table>
+<section id="quick-links">
+<h2>Quick links<a class="headerlink" href="#quick-links" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Install ASK: <a class="reference internal" href="installation.html"><span class="doc">Installation</span></a></p></li>
+<li><p>Run the example data: <a class="reference internal" href="quickstart.html"><span class="doc">Quick start</span></a></p></li>
+<li><p>Search a known ecDNA structure: <a class="reference internal" href="search.html"><span class="doc">Targeted ecDNA search</span></a></p></li>
+<li><p>Interpret output files: <a class="reference internal" href="outputs.html"><span class="doc">Output files</span></a></p></li>
+<li><p>Check command-line options: <a class="reference internal" href="cli_reference.html"><span class="doc">Command line reference</span></a></p></li>
+</ul>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Overview</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#what-ask-does">What ASK does</a></li>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#main-outputs">Main outputs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="overview.html#recommended-reading-order">Recommended reading order</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#create-a-conda-environment">Create a Conda environment</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#install-from-pypi">Install from PyPI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#install-from-github">Install from GitHub</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#check-the-installation">Check the installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="installation.html#required-input">Required input</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quick start</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#get-the-example-data">Get the example data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#run-the-example-bam">Run the example BAM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#run-your-own-bam">Run your own BAM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#choose-segmentation-mode">Choose segmentation mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#prepare-a-bam-from-fastq">Prepare a BAM from FASTQ</a></li>
+<li class="toctree-l2"><a class="reference internal" href="quickstart.html#checklist">Checklist</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="search.html">Search Page</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output files</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#core-result-files">Core result files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#targeted-search-files">Targeted search files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#single-cell-files">Single-cell files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#important-columns">Important columns</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="cli_reference.html">Command line reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="cli_reference.html#ask"><code class="docutils literal notranslate"><span class="pre">ask</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="cli_reference.html#ask-search"><code class="docutils literal notranslate"><span class="pre">ask-search</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="algorithm.html">Algorithm overview</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#alignment-evidence-extraction">1. Alignment evidence extraction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#copy-number-estimation">2. Copy-number estimation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#amplified-segment-detection">3. Amplified segment detection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#breakpoint-pair-detection">4. Breakpoint-pair detection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#amplicon-reconstruction">5. Amplicon reconstruction</a></li>
+<li class="toctree-l2"><a class="reference internal" href="algorithm.html#targeted-search">6. Targeted search</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="overview.html" class="btn btn-neutral float-right" title="Overview" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Weina.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

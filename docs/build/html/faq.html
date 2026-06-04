@@ -1,0 +1,154 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAQ &mdash; AmpliconSeeK 0.1.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=a58bc63e"></script>
+      <script src="_static/doctools.js?v=fd6eb6e6"></script>
+      <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            AmpliconSeeK
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">User guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Overview</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quick start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="search.html">Search Page</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output files</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="cli_reference.html">Command line reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="algorithm.html">Algorithm overview</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">AmpliconSeeK</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">FAQ</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/faq.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="faq">
+<h1>FAQ<a class="headerlink" href="#faq" title="Link to this heading"></a></h1>
+<section id="why-is-the-result-empty">
+<h2>Why is the result empty?<a class="headerlink" href="#why-is-the-result-empty" title="Link to this heading"></a></h2>
+<p>Common reasons include:</p>
+<ul class="simple">
+<li><p>The sample does not contain a strong focal amplification.</p></li>
+<li><p>Sequencing depth is too low.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--mincn</span></code> or <code class="docutils literal notranslate"><span class="pre">--juncread</span></code> is too strict.</p></li>
+<li><p>The BAM genome build does not match <code class="docutils literal notranslate"><span class="pre">-g</span></code>.</p></li>
+<li><p>Soft-clipped reads or SA tags were removed during preprocessing.</p></li>
+<li><p>A coverage-biased assay may need <code class="docutils literal notranslate"><span class="pre">-d</span> <span class="pre">bias</span></code>.</p></li>
+</ul>
+</section>
+<section id="which-segmentation-mode-should-i-use">
+<h2>Which segmentation mode should I use?<a class="headerlink" href="#which-segmentation-mode-should-i-use" title="Link to this heading"></a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">standard</span></code> for WGS and low-bias whole-genome-like data. Use <code class="docutils literal notranslate"><span class="pre">bias</span></code> for
+ATAC-seq, scATAC-seq, ChIP-seq, WES, MNase-seq, and target-capture data.</p>
+</section>
+<section id="can-i-delete-ask-step-pdat-files">
+<h2>Can I delete <code class="docutils literal notranslate"><span class="pre">*_ask_step*.pdat</span></code> files?<a class="headerlink" href="#can-i-delete-ask-step-pdat-files" title="Link to this heading"></a></h2>
+<p>Yes, after the run is complete. Keep them if you plan to rerun later stages
+with <code class="docutils literal notranslate"><span class="pre">--run_from_pdat</span></code>.</p>
+</section>
+<section id="why-does-ask-search-differ-from-de-novo-ask">
+<h2>Why does <code class="docutils literal notranslate"><span class="pre">ask-search</span></code> differ from de novo <code class="docutils literal notranslate"><span class="pre">ask</span></code>?<a class="headerlink" href="#why-does-ask-search-differ-from-de-novo-ask" title="Link to this heading"></a></h2>
+<p>De novo ASK scans the BAM more broadly. <code class="docutils literal notranslate"><span class="pre">ask-search</span></code> starts from a
+known ecDNA structure and constrains evidence collection to relevant regions.
+The output should be interpreted as targeted evidence for the known or related
+structure.</p>
+</section>
+<section id="why-are-single-cell-matrix-files-missing">
+<h2>Why are single-cell matrix files missing?<a class="headerlink" href="#why-are-single-cell-matrix-files-missing" title="Link to this heading"></a></h2>
+<p>ASK writes single-cell matrices only when valid cell barcodes are detected in
+breakpoint-supporting reads. Bulk data and BAM files without barcode tags will
+not produce these matrices.</p>
+</section>
+<section id="do-i-need-to-provide-gene-annotations">
+<h2>Do I need to provide gene annotations?<a class="headerlink" href="#do-i-need-to-provide-gene-annotations" title="Link to this heading"></a></h2>
+<p>Bundled annotation files are used automatically for <code class="docutils literal notranslate"><span class="pre">hg19</span></code> and <code class="docutils literal notranslate"><span class="pre">hg38</span></code>.
+Custom files can be supplied with <code class="docutils literal notranslate"><span class="pre">--genefile</span></code>, <code class="docutils literal notranslate"><span class="pre">--cgfile</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">--sefile</span></code> when needed.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Weina.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
