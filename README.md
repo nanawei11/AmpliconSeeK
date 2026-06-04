@@ -23,7 +23,6 @@ The workflow of AmpliconSeeK:
   - [BAM](#bam)
   - [Reference Annotation Data](#reference-annotation-data)
   - [Known ecDNA Structure for Search](#known-ecdna-structure-for-search)
-- [Directory Structure](#directory-structure)
 - [De Novo ecDNA Detection](#de-novo-ecdna-detection)
   - [How to run from bam file](#how-to-run-from-bam-file)
   - [Output](#output)
@@ -173,45 +172,6 @@ If segment-level order and strand are available, include them:
 | circ_0     | chr7  | 55500000 | 56117062 | +      |
 
 ASK uses the known structure to derive reference breakpoint pairs for targeted search.
-
-## Directory Structure
-
-A typical ASK project can be organized as:
-
-```text
-/path/to/ask_project/
-├── data/
-│   ├── hg38_refgene_process.bed12
-│   ├── se_hg38_sort.bed
-│   └── Census_all_20200624_14_22_39.tsv
-├── bam/
-│   ├── sample.bam
-│   └── sample.bam.bai
-├── known_ecDNA/
-│   └── known_ecDNA.tsv
-├── ask_denovo/
-│   ├── sample_ask_amplicon_circular.tsv
-│   ├── sample_ask_breakpoint_pair.tsv
-│   └── sample_ask_junctionseq/
-└── ask_search/
-    ├── sample_search_ask_amplicon_circular.tsv
-    ├── sample_search_ask_jcs.tsv
-    └── sample_search_ask_junctionseq/
-```
-
-ASK output filenames follow this convention:
-
-```text
-{outprefix}_ask_{result_name}.tsv
-```
-
-For example:
-
-```text
-sample_ask_amplicon_circular.tsv
-sample_ask_breakpoint_pair.tsv
-sample_ask_bin_count_norm.tsv
-```
 
 ## De Novo ecDNA Detection
 
