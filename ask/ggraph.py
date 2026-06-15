@@ -553,11 +553,11 @@ def stat_by_seg(circ_anno, bin_norm, binsize):
 
 def add_stats_circ(circ_anno, bin_norm, binsize=10000):
     """
-    Summarize segment-level circular amplicons and calculate the final Score.
+    Summarize segment-level circular amplicons and calculate the Score.
 
     This function first calls `stat_by_seg` to add CN and fold-change features
     for each segment, then groups segments by AmpliconID to generate circ-level
-    summary statistics. The final `Score` is based on:
+    summary statistics. The `Score` is based on:
       - FCleft_mean_1 and FCright_mean_1: mean left/right fold-change per segment.
       - invCNCV_mean: mean inverse CN coefficient-of-variation feature.
       - invSplitCV: inverse SplitCount coefficient-of-variation feature.
@@ -579,8 +579,7 @@ def add_stats_circ(circ_anno, bin_norm, binsize=10000):
     Returns
     -------
     pandas.DataFrame
-        One row per AmpliconID with circ-level summary statistics and final
-        `Score`.
+        One row per AmpliconID with circ-level summary statistics and `Score`.
     """
 
     circ_anno = stat_by_seg(circ_anno, bin_norm, binsize)
@@ -649,7 +648,18 @@ def add_stats_circ(circ_anno, bin_norm, binsize=10000):
     result['FCright_mean_1'] = result['FCright_sum']/result['Seg_num']
     result['FCleft_mean_1'] = result['FCleft_sum']/result['Seg_num']
     base_score = result['FCleft_mean_1'] + result['FCright_mean_1'] + result['invCNCV_mean'] + result['invSplitCV']
-    penalty_region_add = abs(result['FCleft_mean_1'] - result['FCright_mean_1'])
+    imbalance = abs(result['FCleft_mean_1'] - result['FCright_mean_1'])
+    max_fc_mean = np.maximum(result['FCleft_mean_1'], result['FCright_mean_1'])
+    harmonic_mean = np.where(
+        result['FCleft_mean_1'] + result['FCright_mean_1'] > 0,
+        2 * result['FCleft_mean_1'] * result['FCright_mean_1'] / (result['FCleft_mean_1'] + result['FCright_mean_1']),
+        0,
+    )
+    penalty_region_add = np.where(
+        max_fc_mean > 0,
+        imbalance * (1 - harmonic_mean / max_fc_mean) * max_fc_mean,
+        0,
+    )
     penalty_CNCV = np.where(result['invCNCV_mean'] < 0.5, 1 - result['invCNCV_mean'], 0)
     penalty_CNstd = (
         0.6
