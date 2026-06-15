@@ -28,7 +28,6 @@ Quick links
 
 * Install ASK: :doc:`installation`
 * Run the example data: :doc:`quickstart`
-* Search a known ecDNA structure: :doc:`search`
 * Interpret output files: :doc:`outputs`
 * Check command-line options: :doc:`cli_reference`
 
@@ -39,7 +38,6 @@ Quick links
    overview
    installation
    quickstart
-   search
    outputs
 
 .. toctree::

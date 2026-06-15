@@ -46,5 +46,5 @@ Recommended reading order
 
 New users should start with :doc:`installation`, then run the example command
 in :doc:`quickstart`. After that, use :doc:`outputs` to interpret the result
-files. Users who already have a known ecDNA structure should read
-:doc:`search`.
+files. Users who already have a known ecDNA structure can use the ``ask-search`` command described in
+:doc:`cli_reference`.
