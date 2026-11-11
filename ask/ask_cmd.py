@@ -1,18 +1,27 @@
 #!/usr/bin/env python
 import argparse
+import numbers
 import os
 import time
 from pathlib import Path
 import pickle
 import pandas as pd
 try:
+    from .sc_fragments import FragmentReuseError, add_fragment_generation_arguments, prepare_fragments
+except ImportError:
+    from sc_fragments import FragmentReuseError, add_fragment_generation_arguments, prepare_fragments
+try:
     from . import ask as ask_core
 except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
     import ask as ask_core
 try:
-    from .sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+    from . import bpjoint
 except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
-    from sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+    import bpjoint
+try:
+    from .sc_matrix import clean_barcode_columns, write_cell_assignments_if_single_cell
+except ImportError:  # Allow direct script execution: python ask/ask_cmd.py ...
+    from sc_matrix import clean_barcode_columns, write_cell_assignments_if_single_cell
 try:
     from .ask_utils import (
         plot_ask_amplicons,
@@ -64,6 +73,15 @@ def get_args():
         help="# clip reads for a breakpoint to include in analysis")
     parser.add_argument('-m', '--juncread', type=int, default=10,
         help="# clip reads for a breakpoint pair to include in analysis")
+    parser.add_argument('--force_juncread', action='store_true', default=False,
+        help="use --juncread directly as the bp-pair Count threshold in \
+            construct_amplicon, bypassing the auto-estimated (estimaed_thred) value")
+    parser.add_argument('--min-circ-score', type=float, default=4.0,
+        help="minimum final circular-amplicon Score to retain (inclusive; default: 4)")
+    parser.add_argument('--segment-file', default=None,
+        help="optional precomputed breakpoint segment TSV for step 4")
+    parser.add_argument('--stop-after-step4', action='store_true', default=False,
+        help="write the core step4 tables/pdat/stat and skip matrices, alignments, and plotting")
 
     parser.add_argument('--max_n_breakpoint', type=int, default=500,
         help="max # of breakpoints to included in the analysis, if the \
@@ -103,11 +121,14 @@ def get_args():
     parser.add_argument('--subseg', action='store_true', required=False,
         help="infer the sub segment on amp")
     
-    parser.add_argument('--num_chrom', default = None,
-        help="infer the sub segment on amp")
+    parser.add_argument('--num_chrom', action='store_true',
+    help="supplement global breakpoint candidates with per-chromosome "
+         "top-ranked candidates when the global candidate limit is exceeded.")
     
-    parser.add_argument('--method', default = 'both',
-        help="infer the sub segment on amp")
+    parser.add_argument('--no-sa', action='store_true',
+        help="disable SA-derived breakpoint-pair candidates; "
+             "retain clip-site pairing and PE/DS evidence. "
+             "By default, SA-derived candidates are also included.")
     
     parser.add_argument('--rm_amp_df', action='store_true', required = False,
         help="infer the sub segment on amp")
@@ -116,21 +137,37 @@ def get_args():
     # help="infer the sub segment on amp")
 
     parser.add_argument('--run_from_pdat', type = int, default = 0,
-        help="run ask from saved pdat, resume run from k + 1 step")   #?????????????
+        help="run ask from saved pdat, resume run from k + 1 step")
     
     parser.add_argument('--knn', type = int, default = 3,
-        help="run ask from saved pdat, resume run from k + 1 step")   #?????????????
+        help="run ask from saved pdat, resume run from k + 1 step")
+    
+    parser.add_argument('-sc', '--single-cell', action='store_true',
+        help="Enable single-cell ecDNA assignment using BAM barcode tags; "
+             "provide --fragments or --make-fragments; --sc-barcodes is optional.")
+    
+    parser.add_argument('--fragments', default=None,
+        help="single-cell fragments BED/TSV[.gz] file, one fragment per line, 5 columns: chrom, start, end, barcode, count; Required for cell assignment unless --make-fragments is requested. Prepare separately with ask-make-fragments.")
+    
+    parser.add_argument('--sc-barcodes', default=None,
+        help="optional barcode list, one per line (no header); restrict assignment to these cells. Without it, use all fragment barcodes when fragments are available, otherwise infer candidates from bp_pair.")
 
-    parser.add_argument('--first_filter', action='store_true', required=False,
-        help="infer the sub segment on amp")
-    
-    parser.add_argument('--second_filter', action='store_true', required=False,
-        help="infer the sub segment on amp")
-    
-    parser.add_argument('--third_filter', action='store_true', required=False,
-        help="infer the sub segment on amp")
-    
-    return parser.parse_args()
+    add_fragment_generation_arguments(parser)
+
+    args = parser.parse_args()
+    if not args.single_cell and (args.fragments or args.sc_barcodes or args.make_fragments):
+        parser.error('--fragments, --sc-barcodes and --make-fragments require -sc / --single-cell')
+    if args.no_sa and args.run_from_pdat >= 3:
+        parser.error('--no-sa requires --run_from_pdat 0, 1 or 2 to recompute breakpoint pairs')
+    if args.make_fragments and args.fragments:
+        parser.error('Use either --fragments or --make-fragments, not both')
+    if args.fragments and not Path(args.fragments).is_file():
+        parser.error('--fragments file does not exist')
+    if args.sc_barcodes and not Path(args.sc_barcodes).is_file():
+        parser.error('--sc-barcodes file does not exist')
+    if args.sc_barcodes and not any(line.strip() for line in Path(args.sc_barcodes).read_text().splitlines()):
+        parser.error('--sc-barcodes must contain at least one barcode')
+    return args
 
 
 #------------------------------------------------------------------------------#
@@ -181,6 +218,36 @@ def process_args(args):
 
 
 #------------------------------------------------------------------------------#
+def pack_step4(circ_anno, line_anno, bp_pair, seg, circ_score):
+    """Keep the legacy four-item payload while preserving exact scores."""
+    circles = circ_anno.copy()
+    circles.attrs['step4_circ_score'] = {
+        'version': 1,
+        'table_pickle': pickle.dumps(circ_score),
+    }
+    return [circles, line_anno, bp_pair, seg]
+
+
+def restore_step4_score(circ_anno, bin_norm):
+    """Read saved scores, or reconstruct scores for legacy four-item caches."""
+    saved = circ_anno.attrs.get('step4_circ_score')
+    if saved is not None:
+        if (not isinstance(saved, dict) or saved.get('version') != 1
+                or not isinstance(saved.get('table_pickle'), bytes)):
+            raise ValueError('Invalid or unsupported step4 score cache')
+        score = pickle.loads(saved['table_pickle'])
+        if not isinstance(score, pd.DataFrame):
+            raise ValueError('Step4 score cache must contain a DataFrame')
+        return score
+    if circ_anno.empty:
+        return pd.DataFrame()
+    if bin_norm is None or bin_norm.empty:
+        raise ValueError('Legacy step4 cache needs nonempty bin_norm to restore circle scores')
+    print('Legacy step4 cache: recomputing circle scores from bin_norm')
+    # Match construct_amplicon, which currently scores with binsize=10000.
+    return ask_core.ggraph.add_stats_circ(circ_anno, bin_norm, binsize=10000)
+
+
 def main():
     #--------------------------------------------------------------------------#
     # set start time
@@ -193,6 +260,22 @@ def main():
     #--------------------------------------------------------------------------#
     args = get_args()
     args = process_args(args)
+    if args.single_cell and not args.stop_after_step4:
+        try:
+            args.fragments = prepare_fragments(args, args.bamfile, args.outprefix)
+        except FragmentReuseError as error:
+            raise SystemExit(
+                f"[ERROR] Cannot reuse existing fragments: {error}\n"
+                "Choose another -o prefix or use --fragments-dir to specify a directory that does not exist.\n"
+                f"Current working directory: {Path.cwd()}"
+            ) from None
+        except FileExistsError as error:
+            raise SystemExit(
+                f"[ERROR] Fragments output directory already exists: {error.filename}\n"
+                "Run again to validate and reuse the output. If validation still fails, choose another -o prefix or "
+                "use --fragments-dir to specify a directory that does not exist.\n"
+                f"Current working directory: {Path.cwd()}"
+            ) from None
     
 
     #--------------------------------------------------------------------------#
@@ -200,9 +283,9 @@ def main():
     #--------------------------------------------------------------------------#
     if int(args.run_from_pdat) >= 1 and os.path.isfile(args.output_pdat_1):
         try:
-            bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = pd.read_pickle(args.output_pdat_1)
-            if type(bamfile) == float:
-                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask_core.process_alignment(
+            bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile = pd.read_pickle(args.output_pdat_1)
+            if isinstance(bamfile, numbers.Real):
+                bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile = ask_core.process_alignment(
                 args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
                 mapq = args.mapq, nmmax = args.nmmax,
                 mode = args.segmode, sub_binsize = args.sub_binsize,
@@ -212,7 +295,7 @@ def main():
                 clip_bg.to_csv(args.output_clip, sep='\t', index=False, header=False)
 
                 # save pdat
-                pdat = [bp_all, clip_bg, bin_count, bp_duo_bam, bamfile]
+                pdat = [bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile]
                 with open(args.output_pdat_1, "wb") as f:
                     pickle.dump(pdat, f)
 
@@ -221,16 +304,16 @@ def main():
                     - {0:0.1f} seconds\n'.format(time.time() - startTime))
         except:
             try:
-                bp_all, clip_bg, bin_count, bp_duo_bam = pd.read_pickle(args.output_pdat_1)
+                bp_all, clip_bg, bin_count, sa_bp_pairs = pd.read_pickle(args.output_pdat_1)
                 bamfile = args.bamfile
             except:
-                bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = pd.read_pickle(args.output_pdat_1)
+                bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile = pd.read_pickle(args.output_pdat_1)
 
     if int(args.run_from_pdat) >= 2 and os.path.isfile(args.output_pdat_2):
         cn_amp, cn_seg, bin_norm = pd.read_pickle(args.output_pdat_2)
 
     if int(args.run_from_pdat) >= 3 and os.path.isfile(args.output_pdat_3):
-        bp_duo, bp_cand_stats = pd.read_pickle(args.output_pdat_3)
+        bp_duo, bp_cand_stats, cn_amp  = pd.read_pickle(args.output_pdat_3)
 
     if int(args.run_from_pdat) >= 4 and os.path.isfile(args.output_pdat_4):
         circ_anno, line_anno, bp_pair, seg = pd.read_pickle(args.output_pdat_4)
@@ -241,7 +324,7 @@ def main():
     #--------------------------------------------------------------------------#
     if 'bp_all' not in locals(): # and not os.path.exists(args.output_pdat_1)
         # run module
-        bp_all, clip_bg, bin_count, bp_duo_bam, bamfile = ask_core.process_alignment(
+        bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile = ask_core.process_alignment(
             args.bamfile, gsfile = args.gsfile, binsize = args.binsize,
             mapq = args.mapq, nmmax = args.nmmax,
             mode = args.segmode, sub_binsize = args.sub_binsize,
@@ -253,7 +336,7 @@ def main():
         clip_bg.to_csv(args.output_clip, sep='\t', index=False, header=False)
 
         # save pdat
-        pdat = [bp_all, clip_bg, bin_count, bp_duo_bam, bamfile]
+        pdat = [bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile]
         with open(args.output_pdat_1, "wb") as f:
             pickle.dump(pdat, f)
 
@@ -272,7 +355,8 @@ def main():
                 bin_count, bp_all,
                 args.blfile, args.genefile, args.gsfile, args.cgfile,
                 biasfile = args.biasfile,
-                binsize = args.binsize, min_cn = args.mincn)
+                binsize = args.binsize, min_cn = args.mincn,
+                bamfile = bamfile)
 
         # output results
         cn_amp.to_csv(args.output_cnamp, sep='\t', index=False)
@@ -294,22 +378,25 @@ def main():
     #--------------------------------------------------------------------------#
     if 'bp_duo' not in locals():
         # run module
-        bp_duo, bp_cand_stats = ask_core.detect_bp_pair(
-            bamfile, bp_duo_bam,  bp_all, cn_amp, args.blfile,
+        bp_duo, bp_cand_stats, cn_amp = ask_core.detect_bp_pair(
+            bamfile, sa_bp_pairs,  bp_all, cn_amp, args.blfile,
             binsize = args.binsize, bp_min_clip = args.bpcount,
             mapq = args.mapq, nmmax = args.nmmax,
             max_n_bp = args.max_n_breakpoint,
             clean_bp_perc = args.cleanbp_cutoff,
             only_keep_clean_bp = args.only_keep_cleanbp,
-            bp_pair_info_file = args.output_align, num_chrom = args.num_chrom,
-            way = args.method)  # bp_pair_info_file can remove
+            num_chrom = args.num_chrom,
+            no_sa = args.no_sa,
+            bin_count = bin_count,
+            bin_norm = bin_norm)
 
         # output results
         bp_cand_stats.to_csv(args.output_bpcand, sep='\t', index=False)
         bp_duo.to_csv(args.output_bpduo, sep='\t', index=False)
+        cn_amp.to_csv(args.output_cnamp, sep='\t', index=False)
 
         # save pdat
-        pdat = [bp_duo, bp_cand_stats]
+        pdat = [bp_duo, bp_cand_stats, cn_amp]
         with open(args.output_pdat_3, "wb") as f:
             pickle.dump(pdat, f)
 
@@ -321,35 +408,54 @@ def main():
     #--------------------------------------------------------------------------#
     # step 4 : construct amplicons
     #--------------------------------------------------------------------------#
+    if 'circ_anno' in locals():
+        circ_score = restore_step4_score(circ_anno, locals().get('bin_norm'))
+
     if 'circ_anno' not in locals():
+        precomputed_seg = None
+        if args.segment_file is not None:
+            precomputed_seg = pd.read_csv(args.segment_file, sep='\t')
         # run module
         circ_anno, line_anno, bp_pair, seg, circ_score = ask_core.construct_amplicon(
             bp_duo, bp_cand_stats, cn_amp, bin_norm, args.genefile, args.sefile, args.cgfile, 
             segment_restrict = False,
-            min_junc_cnt = args.juncread, subseg = args.subseg, rm_amp_df = args.rm_amp_df,
-            first_filter = args.first_filter, second_filter = args.second_filter, third_filter = args.third_filter,
-            knn = args.knn, saveseg = args.output_seg, savebp_bp_pair = args.output_bppair, EGA=args.ega)
+            min_junc_cnt = args.juncread, force_juncread = args.force_juncread,
+            subseg = args.subseg, rm_amp_df = args.rm_amp_df,
+            knn = args.knn, saveseg = args.output_seg, savebp_bp_pair = args.output_bppair, EGA=args.ega,
+            min_cn = args.mincn, min_circ_score = args.min_circ_score,
+            precomputed_seg = precomputed_seg)
 
         # output results
+        dedup = circ_anno.attrs.get('circle_dedup')
+        if dedup is not None:
+            for suffix, columns, records in (
+                ('_ask_circle_representative_map.tsv', 'map_columns', 'map_records'),
+                ('_ask_amplicon_circular_derived.tsv', 'segment_columns', 'derived_segments'),
+                ('_ask_amplicon_circular_derived_stat.tsv', 'score_columns', 'derived_scores'),
+            ):
+                pd.DataFrame(dedup[records], columns=dedup[columns]).to_csv(
+                    f'{args.outprefix}{suffix}', sep='\t', index=False)
         bp_pair = clean_barcode_columns(bp_pair)
         circ_anno.to_csv(args.output_circ, sep='\t', index=False)
         line_anno.to_csv(args.output_line, sep='\t', index=False)
         bp_pair.to_csv(args.output_bppair, sep='\t', index=False)
         seg.to_csv(args.output_seg, sep='\t', index=False)
-        write_sc_matrices_if_single_cell(
-            bp_pair,
-            circ_anno,
-            f"{args.outprefix}_ask_sc",
-            bam_path=bamfile,
-            mapq=args.mapq,
-        )
 
-  
+        if args.stop_after_step4:
+            pdat = pack_step4(circ_anno, line_anno, bp_pair, seg, circ_score)
+            with open(args.output_pdat_4, "wb") as f:
+                pickle.dump(pdat, f)
+            if not circ_score.empty:
+                circ_score.to_csv(args.output_circ_stat, sep='\t', index=False)
+            print('construct amplicons - done (stop after step4) '
+                  '- {0:0.1f} seconds\n'.format(time.time() - startTime))
+            return
+
         # output breakpoint pair alignment
-        ask_core.output_bppair_alignment(bp_pair, bamfile, args.output_align_dir, circ_anno)
+        bpjoint.output_bppair_alignment(bp_pair, bamfile, args.output_align_dir, circ_anno)
 
         # save pdat
-        pdat = [circ_anno, line_anno, bp_pair, seg]
+        pdat = pack_step4(circ_anno, line_anno, bp_pair, seg, circ_score)
         with open(args.output_pdat_4, "wb") as f:
             pickle.dump(pdat, f)
 
@@ -357,13 +463,21 @@ def main():
         print('construct amplicons - done \
             - {0:0.1f} seconds\n'.format(time.time() - startTime))
 
-    if not circ_anno.empty:
-        try:
-            # circ_stat = ask.score_circ(circ_anno, bin_norm, binsize = 10000)
-            circ_score.to_csv(args.output_circ_stat, sep='\t', index=False)
-        except:
-            print('ask.score_circ - error \
-            - {0:0.1f} seconds\n'.format(time.time() - startTime))
+    # Run after representative selection, also when resuming from step4 cache.
+    if not circ_score.empty:
+        circ_score.to_csv(args.output_circ_stat, sep='\t', index=False)
+    if args.stop_after_step4:
+        return
+    if args.single_cell:
+        write_cell_assignments_if_single_cell(
+            bp_pair, circ_anno, f"{args.outprefix}_ask_sc",
+            raw_bp_pair=args.output_bpduo,
+            bam_path=args.bamfile, mapq=args.mapq,
+            fragments_path=args.fragments,
+            cell_barcodes=(Path(args.sc_barcodes).read_text().splitlines()
+                           if args.sc_barcodes else None),
+        )
+
     #--------------------------------------------------------------------------#
     # step 5 : plot amplicons
     #--------------------------------------------------------------------------#

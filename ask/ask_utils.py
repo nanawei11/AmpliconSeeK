@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,7 @@ def plot_ask_amplicons(
         )
         print("plot amplicons - done             - {0:0.1f} seconds\n".format(time.time() - start))
     except Exception:
+        traceback.print_exc()
         print("plot amplicons - error             - {0:0.1f} seconds\n".format(time.time() - start))
 
 

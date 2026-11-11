@@ -13,7 +13,7 @@ from covbam import check_read
 #------------------------------------------------------------------------------#
 # filter breakpoint by "n" supporting reads
 #------------------------------------------------------------------------------#
-def bp_filter_by_n(bpall, n=5, f_sort=True):
+def bp_filter_by_n(bpall, n = 5, f_sort = True, pe_window = 150, edges = None,  min_edge_support = 2):
     """
     filter breakpoint by # of softclip and hardclip reads
     for left and right clip, respectively
@@ -25,19 +25,208 @@ def bp_filter_by_n(bpall, n=5, f_sort=True):
     input: output of breakpoint_from_bam
     output: pandas dataframe of split read counts in a dict
 
+    CHANGE (20260718, ported from ask3-EGA 20260705):
+        Keep breakpoints supported by at least n clip reads. When precomputed
+        discordant edges are provided, also retain a breakpoint with 1 to n-1
+        clip reads if a compatible edge endpoint is found on the same
+        chromosome, with the same orientation, within pe_window, and the edge
+        has at least min_edge_support supporting reads.
+
+        This preserves the base-pair-level coordinate supplied by clip reads
+        while allowing discordant PE evidence to rescue low-clip junctions.
+        Endpoint coordinates are indexed in sorted arrays and matched with
+        searchsorted, avoiding repeated BAM scans. If edges is None, the
+        original clip-count threshold (Count >= n) is used.
     """
     df_left = bpall['left']
     df_right = bpall['right']
 
     if (n > 0):
-        df_left = df_left[df_left['Count']>=n]
-        df_right = df_right[df_right['Count']>=n]
+        if edges is not None:
+            # In an edge, '+' denotes a right endpoint (R) and '-' denotes a
+            # left endpoint (L). Build the endpoint index once.
+            edge_index = {}
+            for edge in edges:
+                if len(edge) < 3 or edge[2] < min_edge_support:
+                    continue
+                for chrom, coord, strand in edge[:2]:
+                    clip = 'R' if strand == '+' else 'L'
+                    edge_index.setdefault((chrom, clip), []).append(int(coord))
+            edge_index = {key: np.sort(np.asarray(pos, dtype=np.int64))
+                          for key, pos in edge_index.items()}
+
+            def _keep_by_nearby_edge(df):
+                """Keep Count >= n or rescue a low-count clip near a compatible edge."""
+                if df.empty:
+                    return df
+                out = df.copy().reset_index(drop=True)
+                keep = out['Count'].ge(n)
+                low = out.loc[out['Count'].ge(1) & out['Count'].lt(n)]
+                rescued = 0
+                for (chrom, clip), group in low.groupby(['Chrom', 'Clip'], sort=False):
+                    pos = edge_index.get((chrom, clip))
+                    if pos is None or pos.size == 0:
+                        continue
+                    coord = group['Coord'].to_numpy(dtype=np.int64)
+                    ins = np.searchsorted(pos, coord)
+                    dist = np.full(coord.size, np.iinfo(np.int64).max, dtype=np.int64)
+                    valid = ins < pos.size
+                    dist[valid] = np.abs(pos[ins[valid]] - coord[valid])
+                    valid = ins > 0
+                    dist[valid] = np.minimum(
+                        dist[valid], np.abs(pos[ins[valid] - 1] - coord[valid]))
+                    rescued_idx = group.index[dist <= pe_window]
+                    keep.loc[rescued_idx] = True
+                    rescued += rescued_idx.size
+                print(f'  [bp_filter_by_n] clip>=n retained '
+                      f'{int(out["Count"].ge(n).sum())}; edge({pe_window} bp) '
+                      f'rescued {rescued}/{low.shape[0]}')
+                return out.loc[keep]
+
+            df_left = _keep_by_nearby_edge(df_left)
+            df_right = _keep_by_nearby_edge(df_right)
+        else:
+            df_left = df_left[df_left['Count'] >= n]
+            df_right = df_right[df_right['Count'] >= n]
+
     if (f_sort):
         df_left = df_left.sort_values('Count', ascending=False)
         df_right = df_right.sort_values('Count', ascending=False)
 
     ## return a dict of chrom.position with "left" and "right" keys
     return dict(left=df_left, right=df_right)
+
+
+# #------------------------------------------------------------------------------#
+# # CHANGE(20260718-NEW): Helpers for joint clip and discordant-PE filtering
+# # ported from ask3-EGA
+# #------------------------------------------------------------------------------#
+# def _build_amp_lookup(cn_amp):
+#     """Convert cn_amp to {chrom: [(start, end), ...]} for interval lookup."""
+#     amp = {}
+#     if cn_amp is None or len(cn_amp) == 0:
+#         return None
+#     for row in cn_amp.itertuples():
+#         chrom, start, end = row[1], int(row[2]), int(row[3])
+#         amp.setdefault(chrom, []).append((start, end))
+#     return amp
+
+
+# def _in_amp(amp, chrom, pos, flank):
+#     """Check whether pos +/- flank overlaps an amplified segment."""
+#     if amp is None:
+#         return True
+#     for s, e in amp.get(chrom, ()):
+#         if pos >= s - flank and pos <= e + flank:
+#             return True
+#     return False
+
+
+# def _build_boundary_lookup(cn_amp):
+#     """Build {chrom: sorted[boundary_pos, ...]} for CN segment boundaries.
+#     Rank PE rescue candidates by distance to the nearest boundary."""
+#     bnd = {}
+#     if cn_amp is None or len(cn_amp) == 0:
+#         return None
+#     for row in cn_amp.itertuples():
+#         chrom, start, end = row[1], int(row[2]), int(row[3])
+#         bnd.setdefault(chrom, []).extend((start, end))
+#     for c in bnd:
+#         bnd[c] = sorted(bnd[c])
+#     return bnd
+
+
+# def _dist_to_boundary(bnd, chrom, pos):
+#     """Return the distance from pos to the nearest CN boundary."""
+#     import bisect
+#     if bnd is None:
+#         return 0
+#     arr = bnd.get(chrom)
+#     if not arr:
+#         return 1 << 30
+#     i = bisect.bisect_left(arr, pos)
+#     best = 1 << 30
+#     if i < len(arr):
+#         best = min(best, abs(arr[i] - pos))
+#     if i > 0:
+#         best = min(best, abs(pos - arr[i - 1]))
+#     return best
+
+
+# def _count_discordant_pe_at(bamf, chrom, pos, clip, window, min_mate_dist):
+#     """
+#     Count discordant PE reads supporting breakpoint (chrom, pos, clip).
+#     Follow the same convention as bpjoint.discover_bp_from_discordant:
+#       clip=='R': a forward read with reference_end near pos;
+#       clip=='L': a reverse read with reference_start near pos.
+#     A pair is discordant when it is not proper and its mate is on another
+#     chromosome or farther than min_mate_dist on the same chromosome.
+#     """
+#     cnt = 0
+#     for read in bamf.fetch(chrom, max(0, pos - window), pos + window):
+#         if not check_read(read):
+#             continue
+#         if read.is_proper_pair or read.mate_is_unmapped \
+#                 or read.next_reference_name is None:
+#             continue
+#         far = (read.next_reference_name != chrom) or \
+#               (abs(read.next_reference_start - read.reference_start) > min_mate_dist)
+#         if not far:
+#             continue
+#         if clip == 'R':
+#             if (not read.is_reverse) and abs(read.reference_end - pos) <= window:
+#                 cnt += 1
+#         else:  # 'L'
+#             if read.is_reverse and abs(read.reference_start - pos) <= window:
+#                 cnt += 1
+#     return cnt
+
+
+# def _keep_by_clip_plus_pe(df, n, bamfile, cn_amp, pe_window, min_mate_dist, max_pe_cand):
+#     """
+#     Keep breakpoints with clip>=1 and clip + discordant_PE >= n.
+#     Keep Count>=n directly. Rescue 1<=Count<n candidates with PE evidence
+#     only inside amplified regions and within max_pe_cand.
+#     """
+#     if df.empty:
+#         return df
+#     pass_clip = df[df['Count'] >= n]          # clip support passes directly
+#     need_pe = df[df['Count'] < n]             # requires PE support
+#     if need_pe.empty:
+#         return pass_clip
+
+#     amp = _build_amp_lookup(cn_amp)
+#     # Count PE support only inside amplified regions.
+#     if amp is not None:
+#         mask = [_in_amp(amp, r.Chrom, int(r.Coord), pe_window)
+#                 for r in need_pe.itertuples()]
+#         need_pe = need_pe[mask]
+#     if need_pe.empty:
+#         return pass_clip
+
+#     # Limit large candidate sets. Rank by distance to the nearest CN boundary,
+#     # then by clip support, because true junctions occur at segment boundaries.
+#     if need_pe.shape[0] > max_pe_cand:
+#         print(f'  [bp_filter_by_n] {need_pe.shape[0]} PE rescue candidates; '
+#               f'keep the closest {max_pe_cand} to CN boundaries')
+#         bnd = _build_boundary_lookup(cn_amp)
+#         need_pe = need_pe.assign(
+#             _bdist=[_dist_to_boundary(bnd, r.Chrom, int(r.Coord))
+#                     for r in need_pe.itertuples()]
+#         ).sort_values(['_bdist', 'Count'], ascending=[True, False]).head(max_pe_cand)
+#         need_pe = need_pe.drop(columns='_bdist')
+
+#     rescued_idx = []
+#     with pysam.AlignmentFile(bamfile, 'rb') as bamf:
+#         for r in need_pe.itertuples():
+#             pe = _count_discordant_pe_at(
+#                 bamf, r.Chrom, int(r.Coord), r.Clip, pe_window, min_mate_dist)
+#             if r.Count + pe >= n:
+#                 rescued_idx.append(r.Index)
+#     rescued = need_pe.loc[rescued_idx]
+#     print(f'  [bp_filter_by_n] clip>=n kept {pass_clip.shape[0]}; '
+#           f'PE rescued {rescued.shape[0]}/{need_pe.shape[0]}')
+#     return pd.concat([pass_clip, rescued]) if not rescued.empty else pass_clip
 
 
 #------------------------------------------------------------------------------#
@@ -86,7 +275,7 @@ def stratified_sampling(data, group_column, value_column, sample_percentage=0.3,
     group_sizes = int(sample_percentage * data.shape[0])
 
 
-    # 使用 numpy.random.choice 进行抽样
+    # sample with numpy.random.choice
     sampled_indices = np.random.choice(data.index, size=group_sizes, replace=False, p=probabilities)
 
     sampled_data = data.loc[sampled_indices]
@@ -370,16 +559,16 @@ def refine_bp_cand_bam(bp_duo, bp_all):
     bp_all_df = pd.concat([bp_all['left'][bp_all['left']['Count']>1], \
                            bp_all['right'][bp_all['right']['Count']>1]], copy=False).set_index(['Chrom','Coord','Clip'])
 
-    # 分块合并
+    # merge blocks
     df = pd.merge(df, bp_all_df, left_index=True, right_index=True, how='left', copy=False)
 
-    # 使用map填充  
+    # fill missing values
     df['Count_y'] = df['Count_y'].fillna(df['Count_x'])
 
-    # 取最大count
+    # take the maximum count
     df['Count'] = np.maximum(df['Count_x'], df['Count_y'])
 
-    # 删除中间列
+    # drop intermediate columns
     df = df.drop(['Count_x', 'Count_y'], axis=1).reset_index()
 
     df['CleanBP'] =  True

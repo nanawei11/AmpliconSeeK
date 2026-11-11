@@ -12,7 +12,12 @@ ecDNA-Search Module Methodology:
 3. Match those breakpoint pairs to ASK breakpoint-pair evidence.
 4. Map supporting read names to cell barcodes.
 5. Build cell-by-breakpoint and cell-by-ecDNA evidence tables.
-6. Classify ecDNA-positive cells by a configurable support threshold.
+6. For the BAM workflow, use the shared ASK single-cell assignment: direct,
+   weak, or coverage evidence with per-ring Q1 replacing the fixed cutoff.
+   The coverage path requires enrichment, cosine, and full-segment coverage.
+   Fragments are required for BAM-based cell assignment.
+   Without a whitelist, use fragment barcodes if available, else bp_pair barcodes.
+   Legacy table-based helper functions below retain their original thresholds.
 """
 
 from __future__ import annotations
@@ -33,28 +38,20 @@ import sys
 import pandas as pd
 from pandas.errors import EmptyDataError
 try:
-    from .ask_utils import (
-        DATA_DIR,
-        ask_output_paths,
-        plot_ask_amplicons,
-        prepare_ask_output_paths,
-        resolve_ask_annotation_files,
-        write_ask_stats,
-    )
+    from .sc_fragments import add_fragment_generation_arguments, prepare_fragments
+except ImportError:
+    from sc_fragments import add_fragment_generation_arguments, prepare_fragments
+try:
+    from .ask_utils import (DATA_DIR, ask_output_paths, plot_ask_amplicons, prepare_ask_output_paths,
+        resolve_ask_annotation_files, write_ask_stats,)
 except ImportError:  # Allow direct script execution: python ask/ecDNA_search.py ...
-    from ask_utils import (
-        DATA_DIR,
-        ask_output_paths,
-        plot_ask_amplicons,
-        prepare_ask_output_paths,
-        resolve_ask_annotation_files,
-        write_ask_stats,
-    )
+    from ask_utils import (DATA_DIR, ask_output_paths, plot_ask_amplicons, prepare_ask_output_paths,
+        resolve_ask_annotation_files, write_ask_stats,)
 
 try:
-    from .sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+    from .sc_matrix import clean_barcode_columns, write_cell_assignments_if_single_cell
 except ImportError:  # Allow direct script execution: python ask/ecDNA_search.py ...
-    from sc_matrix import clean_barcode_columns, write_sc_matrices_if_single_cell
+    from sc_matrix import clean_barcode_columns, write_cell_assignments_if_single_cell
 
 try:
     import pysam
@@ -64,13 +61,9 @@ except ImportError:  # pragma: no cover - notebook users may install pysam later
 
 MODULE_DIR = Path(__file__).resolve().parent
 
-DEFAULT_ASK_PATHS = (
-    MODULE_DIR,
-)
+DEFAULT_ASK_PATHS = (MODULE_DIR,)
 
-DEFAULT_ASK_DATA_PATHS = (
-    DATA_DIR,
-)
+DEFAULT_ASK_DATA_PATHS = (DATA_DIR,)
 
 
 @dataclass(frozen=True)
@@ -79,7 +72,7 @@ class SampleInput:
     circular_path: Path | pd.DataFrame
     filename: str | None = None
 
-
+#------------------------------------------------------------------------------#
 def read_table(path: str | Path) -> pd.DataFrame:
     path = Path(path)
     if not path.exists():
@@ -104,19 +97,10 @@ def read_table(path: str | Path) -> pd.DataFrame:
         ) from exc
 
 
-ASK_CIRCULAR_NOHEADER_COLUMNS = [
-    "Chrom",
-    "Start",
-    "End",
-    "Strand",
-    "Score",
-    "AmpliconID",
-    "Gene",
-    "CancerGene",
-    "SegmentEdge",
-]
+ASK_CIRCULAR_NOHEADER_COLUMNS = ["Chrom", "Start", "End", "Strand", "Score", "AmpliconID", "Gene", "CancerGene",
+    "SegmentEdge",]
 
-
+#------------------------------------------------------------------------------#
 def read_circular_table(path: str | Path) -> pd.DataFrame:
     """
     Read known ecDNA/circular structure tables.
@@ -145,7 +129,7 @@ def read_circular_table(path: str | Path) -> pd.DataFrame:
     raw.columns = names
     return raw
 
-
+#------------------------------------------------------------------------------#
 def write_table(df: pd.DataFrame, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,14 +138,14 @@ def write_table(df: pd.DataFrame, path: str | Path) -> None:
     else:
         df.to_csv(path, sep="\t", index=False)
 
-
+#------------------------------------------------------------------------------#
 def write_pickle(obj, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
         pickle.dump(obj, handle)
 
-
+#------------------------------------------------------------------------------#
 def ask_style_output_paths(outdir: str | Path, bam_path: str | Path, outprefix: str | Path | None = None) -> dict[str, Path]:
     """
     Return ASK-compatible output paths for targeted ASK-search.
@@ -174,39 +158,29 @@ def ask_style_output_paths(outdir: str | Path, bam_path: str | Path, outprefix: 
     prefix = Path(outprefix) if outprefix else outdir / Path(bam_path).stem
     return prepare_ask_output_paths(prefix)
 
-
+#------------------------------------------------------------------------------#
 def cleanup_legacy_bam_search_outputs(outdir: str | Path) -> None:
     """
     Remove old debug/auxiliary files from earlier ASK-search runs.
     """
     outdir = Path(outdir)
-    patterns = [
-        "target_*.tsv",
-        "target_*.bedgraph",
-        "target_*.txt",
-        "segment_copy_number.tsv",
-        "circle_copy_number_summary.tsv",
-        "targeted_bppair_matches.tsv",
-        "bam_junction_evidence.tsv",
-        "breakpoint_support_summary.tsv",
-        "*_ask_jcs_junctions.tsv",
-        "cell_by_breakpoint_matrix.tsv",
-        "cell_circle_summary.tsv",
-        "cell_ecDNA_annotation.tsv",
-    ]
+    patterns = ["target_*.tsv", "target_*.bedgraph", "target_*.txt", "segment_copy_number.tsv",
+        "circle_copy_number_summary.tsv", "targeted_bppair_matches.tsv", "bam_junction_evidence.tsv",
+        "breakpoint_support_summary.tsv", "*_ask_jcs_junctions.tsv", "cell_by_breakpoint_matrix.tsv",
+        "cell_circle_summary.tsv", "cell_ecDNA_annotation.tsv",]
     for pattern in patterns:
         for path in outdir.glob(pattern):
             if path.is_file():
                 path.unlink()
 
-
+#------------------------------------------------------------------------------#
 def first_existing_path(paths: Iterable[str | Path | None]) -> Path | None:
     for path in paths:
         if path and Path(path).exists():
             return Path(path)
     return None
 
-
+#------------------------------------------------------------------------------#
 def prioritize_module_paths(paths: Iterable[str | Path | None]) -> None:
     """
     Put module search paths in the given priority order.
@@ -225,32 +199,19 @@ def prioritize_module_paths(paths: Iterable[str | Path | None]) -> None:
             sys.path.remove(path)
         sys.path.insert(0, path)
 
-
-def resolve_annotation_files(
-    genome: str = "hg38",
-    genefile: str | Path | None = None,
-    sefile: str | Path | None = None,
-    cgfile: str | Path | None = None,
+#------------------------------------------------------------------------------#
+def resolve_annotation_files(genome: str = "hg38", genefile: str | Path | None = None,
+    sefile: str | Path | None = None, cgfile: str | Path | None = None,
 ) -> tuple[Path | None, Path | None, Path | None]:
     """
     Resolve ASK-style annotation files for Gene/CancerGene/SE annotation.
     """
-    files = resolve_ask_annotation_files(
-        genome=genome,
-        genefile=genefile,
-        sefile=sefile,
-        cgfile=cgfile,
-    )
+    files = resolve_ask_annotation_files(genome=genome, genefile=genefile, sefile=sefile, cgfile=cgfile)
     return files["genefile"], files["sefile"], files["cgfile"]
 
-
-def annotate_amplicon_table(
-    df: pd.DataFrame,
-    genefile: str | Path | None = None,
-    sefile: str | Path | None = None,
-    cgfile: str | Path | None = None,
-    ask_path: str | Path | None = None,
-) -> pd.DataFrame:
+#------------------------------------------------------------------------------#
+def annotate_amplicon_table(df: pd.DataFrame, genefile: str | Path | None = None, sefile: str | Path | None = None,
+    cgfile: str | Path | None = None, ask_path: str | Path | None = None) -> pd.DataFrame:
     """
     Add Gene, CancerGene, and SE columns with ASK grange/misc helpers.
     """
@@ -279,15 +240,9 @@ def annotate_amplicon_table(
         out["SE"] = ""
     return out
 
-
-def write_junction_sequence_outputs(
-    bp_pair: pd.DataFrame,
-    bam_path: str | Path,
-    output_align: str | Path,
-    output_align_dir: str | Path,
-    ask_path: str | Path | None = None,
-    circ_anno: pd.DataFrame | None = None,
-) -> None:
+#------------------------------------------------------------------------------#
+def write_junction_sequence_outputs(bp_pair: pd.DataFrame, bam_path: str | Path, output_align: str | Path,
+    output_align_dir: str | Path, ask_path: str | Path | None = None, circ_anno: pd.DataFrame | None = None) -> None:
     """
     Write ASK-style breakpoint junction alignment/sequence outputs.
     """
@@ -308,25 +263,8 @@ def write_junction_sequence_outputs(
     except Exception:
         with output_align.open("w") as handle:
             for idx, row in bp_pair.reset_index(drop=True).iterrows():
-                handle.write(
-                    ">"
-                    + "\t".join(
-                        map(
-                            str,
-                            [
-                                row["Chrom1"],
-                                row["Coord1"],
-                                row["Clip1"],
-                                row["Chrom2"],
-                                row["Coord2"],
-                                row["Clip2"],
-                                row.get("Count", ""),
-                                row.get("offset", ""),
-                            ],
-                        )
-                    )
-                    + "\n"
-                )
+                handle.write(">" + "\t".join(map(str, [row["Chrom1"], row["Coord1"], row["Clip1"], row["Chrom2"],
+                                row["Coord2"], row["Clip2"], row.get("Count", ""), row.get("offset", ""),])) + "\n")
                 handle.write(str(row.get("Seq", "")) + "\n\n")
 
     for old in output_align_dir.glob("junction_*.txt"):
@@ -348,13 +286,9 @@ def write_junction_sequence_outputs(
 
     _write_breakpoint_junction_sequence_outputs(bp_pair, str(bam_path), output_align_dir, bpjoint)
 
-
-def _write_breakpoint_junction_sequence_outputs(
-    bp_pair: pd.DataFrame,
-    bam_path: str,
-    output_align_dir: Path,
-    bpjoint: object,
-) -> None:
+#------------------------------------------------------------------------------#
+def _write_breakpoint_junction_sequence_outputs(bp_pair: pd.DataFrame, bam_path: str, output_align_dir: Path,
+    bpjoint: object) -> None:
     for idx, row in bp_pair.reset_index(drop=True).iterrows():
         stem = (
             f"junction_{idx:04d}_"
@@ -363,14 +297,9 @@ def _write_breakpoint_junction_sequence_outputs(
         )
         _write_bp_alignment_file(output_align_dir / f"{stem}.txt", row, bam_path, bpjoint)
 
-
-def _write_circ_junction_sequence_outputs(
-    bp_pair: pd.DataFrame,
-    bam_path: str,
-    output_align_dir: Path,
-    circ_anno: pd.DataFrame,
-    bpjoint: object,
-) -> None:
+#------------------------------------------------------------------------------#
+def _write_circ_junction_sequence_outputs(bp_pair: pd.DataFrame, bam_path: str, output_align_dir: Path,
+    circ_anno: pd.DataFrame, bpjoint: object) -> None:
     bp_norm = bp_pair.reset_index(drop=True).copy()
     for amplicon_id, sub in circ_anno.groupby("AmpliconID", sort=False):
         matched = _bp_pairs_for_amplicon(bp_norm, sub)
@@ -379,24 +308,26 @@ def _write_circ_junction_sequence_outputs(
             for _, row in matched.iterrows():
                 _write_bp_alignment_handle(handle, row, bam_path, bpjoint)
 
-
+#------------------------------------------------------------------------------#
 def _bp_pairs_for_amplicon(bp_pair: pd.DataFrame, circ_sub: pd.DataFrame) -> pd.DataFrame:
     circ = circ_sub.copy().reset_index(drop=True)
     if circ.empty:
         return bp_pair.iloc[0:0].copy()
     circ.loc[circ["Strand"].astype(str) == "-", ["Start", "End"]] = circ.loc[
-        circ["Strand"].astype(str) == "-", ["End", "Start"]
-    ].values
+        circ["Strand"].astype(str) == "-", ["End", "Start"]].values
     keep: list[int] = []
     seen: set[int] = set()
     for idx in range(len(circ)):
         current = circ.iloc[idx]
         nxt = circ.iloc[(idx + 1) % len(circ)]
-        expected = [
-            (current["Chrom"], int(current["End"]), "R", nxt["Chrom"], int(nxt["Start"]), "L"),
-        ]
+        cur_exit_clip = "L" if str(current.get("Strand", "")) == "-" else "R"
+        nxt_entry_clip = "R" if str(nxt.get("Strand", "")) == "-" else "L"
+        expected = [(current["Chrom"], int(current["End"]), cur_exit_clip,
+             nxt["Chrom"], int(nxt["Start"]), nxt_entry_clip),]
         if len(circ) == 1:
-            expected.append((current["Chrom"], int(current["Start"]), "L", current["Chrom"], int(current["End"]), "R"))
+            cur_entry_clip = "R" if str(current.get("Strand", "")) == "-" else "L"
+            expected.append((current["Chrom"], int(current["Start"]), cur_entry_clip,
+                             current["Chrom"], int(current["End"]), cur_exit_clip))
         for row_idx, row in bp_pair.iterrows():
             if row_idx in seen:
                 continue
@@ -405,70 +336,43 @@ def _bp_pairs_for_amplicon(bp_pair: pd.DataFrame, circ_sub: pd.DataFrame) -> pd.
                 seen.add(row_idx)
     return bp_pair.loc[keep].copy()
 
-
+#------------------------------------------------------------------------------#
 def _same_bp_pair(row: pd.Series, pair: tuple[object, int, str, object, int, str], window: int = 2) -> bool:
     a = (str(pair[0]), int(pair[1]), str(pair[2]))
     b = (str(pair[3]), int(pair[4]), str(pair[5]))
     row_a = (str(row["Chrom1"]), int(row["Coord1"]), str(row["Clip1"]))
     row_b = (str(row["Chrom2"]), int(row["Coord2"]), str(row["Clip2"]))
     return (_same_breakend(row_a, a, window) and _same_breakend(row_b, b, window)) or (
-        _same_breakend(row_a, b, window) and _same_breakend(row_b, a, window)
-    )
+        _same_breakend(row_a, b, window) and _same_breakend(row_b, a, window))
 
-
+#------------------------------------------------------------------------------#
 def _same_breakend(a: tuple[str, int, str], b: tuple[str, int, str], window: int) -> bool:
     return a[0] == b[0] and a[2] == b[2] and abs(a[1] - b[1]) <= window
 
-
+#------------------------------------------------------------------------------#
 def _write_bp_alignment_file(out: Path, row: pd.Series, bam_path: str, bpjoint: object) -> None:
     with out.open("w") as handle:
         _write_bp_alignment_handle(handle, row, bam_path, bpjoint)
 
-
+#------------------------------------------------------------------------------#
 def _write_bp_alignment_handle(handle: object, row: pd.Series, bam_path: str, bpjoint: object) -> None:
-    handle.write(
-        ">"
-        + "\t".join(
-            map(
-                str,
-                [
-                    row["Chrom1"],
-                    row["Coord1"],
-                    row["Clip1"],
-                    row["Chrom2"],
-                    row["Coord2"],
-                    row["Clip2"],
-                    row.get("Count", ""),
-                    row.get("offset", ""),
-                ],
-            )
-        )
-        + "\n"
-    )
+    handle.write(">" + "\t".join(map(str, [row["Chrom1"], row["Coord1"], row["Clip1"], row["Chrom2"], row["Coord2"],
+                    row["Clip2"], row.get("Count", ""), row.get("offset", ""),])) + "\n")
     if str(row.get("Seq", "")) == "PE_Support":
         handle.write("PE_Support\n\n")
         return
     try:
-        alignment = bpjoint.get_alignment(
-            bam_path,
-            (row["Chrom1"], int(row["Coord1"]), row["Clip1"]),
-            (row["Chrom2"], int(row["Coord2"]), row["Clip2"]),
-            offset=int(row.get("offset", 0)),
-        )
+        alignment = bpjoint.get_alignment(bam_path, (row["Chrom1"], int(row["Coord1"]), row["Clip1"]),
+            (row["Chrom2"], int(row["Coord2"]), row["Clip2"]), offset=int(row.get("offset", 0)))
         for line in alignment:
             handle.write(f"{line}\n")
         handle.write("\n\n")
     except Exception:
         handle.write(str(row.get("Seq", "")) + "\n\n")
 
-
-def simple_amplicon_plot(
-    amp_df: pd.DataFrame,
-    bin_norm: pd.DataFrame,
-    fig_dir: str | Path,
-    binsize: int = 10000,
-    max_plots: int = 20,
-) -> None:
+#------------------------------------------------------------------------------#
+def simple_amplicon_plot(amp_df: pd.DataFrame, bin_norm: pd.DataFrame, fig_dir: str | Path, binsize: int = 10000,
+    max_plots: int = 20) -> None:
     """
     Lightweight fallback plot when ASK trackplot cannot render.
     """
@@ -501,11 +405,9 @@ def simple_amplicon_plot(
             width = max(abs(x2 - x1), binsize)
             ax.add_patch(Arc((center, 1.02), width=width, height=0.55, theta1=0, theta2=180, linewidth=1.2))
         if not bin_norm.empty:
-            cn = bin_norm[
-                (bin_norm["Chrom"].astype(str).isin(chroms))
+            cn = bin_norm[(bin_norm["Chrom"].astype(str).isin(chroms))
                 & (bin_norm["Coord"].astype(int) >= start - 5 * binsize)
-                & (bin_norm["Coord"].astype(int) <= end + 5 * binsize)
-            ]
+                & (bin_norm["Coord"].astype(int) <= end + 5 * binsize)]
             if not cn.empty:
                 ax2 = ax.twinx()
                 ax2.plot(cn["Coord"], cn["CN"], color="0.35", linewidth=0.8, alpha=0.8)
@@ -518,18 +420,10 @@ def simple_amplicon_plot(
         fig.savefig(fig_dir / f"circular_{amplicon_id}.pdf")
         plt.close(fig)
 
-
-def plot_target_amplicons(
-    circ_anno: pd.DataFrame,
-    line_anno: pd.DataFrame,
-    cn_amp: pd.DataFrame,
-    genefile: str | Path | None,
-    sefile: str | Path | None,
-    bin_norm: pd.DataFrame,
-    binsize: int,
-    fig_dir: str | Path,
-    ask_path: str | Path | None = None,
-) -> None:
+#------------------------------------------------------------------------------#
+def plot_target_amplicons(circ_anno: pd.DataFrame, line_anno: pd.DataFrame, cn_amp: pd.DataFrame,
+    genefile: str | Path | None, sefile: str | Path | None, bin_norm: pd.DataFrame, binsize: int, fig_dir: str | Path,
+    ask_path: str | Path | None = None) -> None:
     """
     Plot amplicon figures with the original ASK plotting function.
     """
@@ -540,24 +434,10 @@ def plot_target_amplicons(
     print(f"plot amplicons - ask.py: {ask_core.__file__}")
     print(f"plot amplicons - trackplot.py: {trackplot.__file__}")
     print(f"plot amplicons - genefile: {genefile}")
-    plot_ask_amplicons(
-        ask_core,
-        circ_anno,
-        line_anno,
-        cn_amp,
-        genefile,
-        sefile,
-        bin_norm,
-        fig_dir=fig_dir,
-        binsize=binsize,
-        plot_n=5,
-        fig_width=15,
-        fontsize=12,
-        ext=0.3,
-        clean_old_pdf=True,
-    )
+    plot_ask_amplicons(ask_core, circ_anno, line_anno, cn_amp, genefile, sefile, bin_norm, fig_dir=fig_dir,
+        binsize=binsize, plot_n=5, fig_width=15, fontsize=12, ext=0.3, clean_old_pdf=True)
 
-
+#------------------------------------------------------------------------------#
 def parse_sample_arg(value: str) -> SampleInput:
     """
     Parse one sample argument.
@@ -570,9 +450,7 @@ def parse_sample_arg(value: str) -> SampleInput:
     original EGA filename used by downstream Seurat annotation code.
     """
     if "=" not in value:
-        raise ValueError(
-            "--circular must be sample_id=path or sample_id,filename=path"
-        )
+        raise ValueError("--circular must be sample_id=path or sample_id,filename=path")
     left, right = value.split("=", 1)
     if "," in left:
         sample_id, filename = left.split(",", 1)
@@ -580,7 +458,7 @@ def parse_sample_arg(value: str) -> SampleInput:
         sample_id, filename = left, left
     return SampleInput(sample_id=sample_id, filename=filename, circular_path=Path(right))
 
-
+#------------------------------------------------------------------------------#
 def load_circular_tables(samples: Iterable[SampleInput]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for sample in samples:
@@ -598,19 +476,19 @@ def load_circular_tables(samples: Iterable[SampleInput]) -> pd.DataFrame:
     out["CircleID"] = out["AmpliconID"].astype(str) + "_" + out["Filename"].astype(str)
     return out
 
-
+#------------------------------------------------------------------------------#
 def require_columns(df: pd.DataFrame, columns: Iterable[str]) -> None:
     missing = [col for col in columns if col not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
-
+#------------------------------------------------------------------------------#
 def split_genes(value: object) -> list[str]:
     if pd.isna(value):
         return []
     return [item.strip() for item in str(value).split(";") if item.strip()]
 
-
+#------------------------------------------------------------------------------#
 def summarize_cancer_genes(values: pd.Series, target_genes: Iterable[str] | None = None) -> str:
     genes: list[str] = []
     for value in values.dropna():
@@ -620,7 +498,7 @@ def summarize_cancer_genes(values: pd.Series, target_genes: Iterable[str] | None
         genes = [gene for gene in genes if gene in targets]
     return "; ".join(sorted(set(genes)))
 
-
+#------------------------------------------------------------------------------#
 def extract_breakpoint_pairs(circular_df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert ASK circular amplicon segments into circular breakpoint pairs.
@@ -666,42 +544,38 @@ def extract_breakpoint_pairs(circular_df: pd.DataFrame) -> pd.DataFrame:
                 }
             )
 
-    return pd.DataFrame(rows).drop_duplicates(
-        ["CircleID", "Chrom1", "Coord1", "Chrom2", "Coord2"]
-    )
+    return pd.DataFrame(rows).drop_duplicates(["CircleID", "Chrom1", "Coord1", "Chrom2", "Coord2"])
 
-
+#------------------------------------------------------------------------------#
 def infer_clip_from_known_breakpoints(breakpoints: pd.DataFrame) -> pd.DataFrame:
     """
     Add ASK-style Clip1/Clip2 labels for known ecDNA junctions.
-
-    A circular segment contributes its right boundary (R) as Coord1 and the next
-    segment contributes its left boundary (L) as Coord2. This matches the ASK
-    convention used by getbppair/bppair.
     """
     out = breakpoints.copy()
-    if "Clip1" not in out.columns:
-        out["Clip1"] = "R"
-    if "Clip2" not in out.columns:
-        out["Clip2"] = "L"
+    if "Strand1" in out.columns and "Strand2" in out.columns:
+        out["Clip1"] = out["Strand1"].astype(str).map(lambda s: "L" if s == "-" else "R")
+        out["Clip2"] = out["Strand2"].astype(str).map(lambda s: "R" if s == "-" else "L")
+    else:
+        if "Clip1" not in out.columns:
+            out["Clip1"] = "R"
+        if "Clip2" not in out.columns:
+            out["Clip2"] = "L"
     return out
 
-
+#------------------------------------------------------------------------------#
 def canonical_breakpoint_key(chrom1: object, coord1: object, chrom2: object, coord2: object) -> tuple:
     a = (str(chrom1), int(coord1))
     b = (str(chrom2), int(coord2))
     return tuple(sorted((a, b)))
 
-
+#------------------------------------------------------------------------------#
 def add_breakpoint_key(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    out["_bp_key"] = [
-        canonical_breakpoint_key(row.Chrom1, row.Coord1, row.Chrom2, row.Coord2)
-        for row in out.itertuples()
-    ]
+    out["_bp_key"] = [canonical_breakpoint_key(row.Chrom1, row.Coord1, row.Chrom2, row.Coord2)
+        for row in out.itertuples()]
     return out
 
-
+#------------------------------------------------------------------------------#
 def parse_list_cell(value: object) -> list:
     if isinstance(value, (list, tuple, set)):
         return list(value)
@@ -710,6 +584,9 @@ def parse_list_cell(value: object) -> list:
     if pd.isna(value):
         return []
     text = str(value)
+
+    if text.strip() in {"", "[]", "None", "nan"}:
+        return []
     for parser in (json.loads, ast.literal_eval):
         try:
             parsed = parser(text)
@@ -719,14 +596,14 @@ def parse_list_cell(value: object) -> list:
             pass
     return [item.strip() for item in text.strip("[]").split(",") if item.strip()]
 
-
+#------------------------------------------------------------------------------#
 def safe_get_tag(read, tag: str, default=None):
     try:
         return read.get_tag(tag)
     except Exception:
         return default
 
-
+#------------------------------------------------------------------------------#
 def ask_check_read(read, mapq: int = 20, nmmax: int = 1) -> bool:
     """
     ASK-compatible read filter.
@@ -740,7 +617,7 @@ def ask_check_read(read, mapq: int = 20, nmmax: int = 1) -> bool:
     nm = safe_get_tag(read, "NM", 0)
     return nm is None or nm <= nmmax
 
-
+#------------------------------------------------------------------------------#
 def read_clip_side(read) -> tuple[str, int] | tuple[None, None]:
     """
     Return ASK-style clip side and coordinate for one read.
@@ -752,11 +629,11 @@ def read_clip_side(read) -> tuple[str, int] | tuple[None, None]:
         return None, None
     if read.cigartuples[0][0] in {4, 5}:
         return "L", read.reference_start
-    if read.cigartuples[-1][0] in {4, 5}:
+    if read.cigartuples[-1][0] in {4, 5} and read.reference_end is not None:
         return "R", read.reference_end - 1
     return None, None
 
-
+#------------------------------------------------------------------------------#
 def read_barcode(read, tags: Iterable[str] = ("CB", "CR", "BX", "BC")):
     for tag in tags:
         value = safe_get_tag(read, tag)
@@ -764,7 +641,7 @@ def read_barcode(read, tags: Iterable[str] = ("CB", "CR", "BX", "BC")):
             return value
     return None
 
-
+#------------------------------------------------------------------------------#
 def parse_sa_tag(read) -> list[dict[str, object]]:
     """
     Parse SA tag entries into dictionaries.
@@ -793,7 +670,7 @@ def parse_sa_tag(read) -> list[dict[str, object]]:
         )
     return rows
 
-
+#------------------------------------------------------------------------------#
 def load_ask_getbppair(ask_path: str | Path | None = None):
     """
     Load ASK getbppair module without requiring it to be installed.
@@ -811,7 +688,7 @@ def load_ask_getbppair(ask_path: str | Path | None = None):
 
     return getbppair
 
-
+#------------------------------------------------------------------------------#
 def load_ask_modules(ask_path: str | Path | None = None):
     """
     Load ASK modules used by the targeted pipeline.
@@ -849,42 +726,28 @@ def load_ask_modules(ask_path: str | Path | None = None):
         "getbppair": getbppair,
     }
 
-
+#------------------------------------------------------------------------------#
 def list2df_count_simple(items: list[tuple], columns: list[str]) -> pd.DataFrame:
     if not items:
         return pd.DataFrame(columns=columns + ["Count"])
-    return (
-        pd.DataFrame(items, columns=columns)
-        .groupby(columns)
-        .size()
-        .reset_index(name="Count")
-        .sort_values("Count", ascending=False)
-        .reset_index(drop=True)
-    )
+    return (pd.DataFrame(items, columns=columns).groupby(columns).size().reset_index(name="Count")
+        .sort_values("Count", ascending=False).reset_index(drop=True))
 
-
+#------------------------------------------------------------------------------#
 def target_chromosomes_from_circular(circular_df: pd.DataFrame) -> list[str]:
     return sorted(circular_df["Chrom"].astype(str).unique())
 
-
+#------------------------------------------------------------------------------#
 def known_single_segment_circles(circular_df: pd.DataFrame) -> pd.DataFrame:
     if circular_df.empty or "CircleID" not in circular_df.columns:
         return pd.DataFrame(columns=["Chrom", "Start", "End"])
     counts = circular_df.groupby("CircleID")["CircleID"].transform("size")
     return circular_df.loc[counts == 1, ["Chrom", "Start", "End"]].drop_duplicates().copy()
 
-
-def target_process_alignment(
-    bam_path: str | Path,
-    breakpoints: pd.DataFrame,
-    target_chroms: Iterable[str],
-    circular_df: pd.DataFrame | None = None,
-    cn_background: str = "genome",
-    window: int = 200,
-    binsize: int = 10000,
-    mapq: int = 20,
-    nmmax: int = 3,
-    ask_path: str | Path | None = None,
+#------------------------------------------------------------------------------#
+def target_process_alignment(bam_path: str | Path, breakpoints: pd.DataFrame, target_chroms: Iterable[str],
+    circular_df: pd.DataFrame | None = None, cn_background: str = "genome", window: int = 200, binsize: int = 10000,
+    mapq: int = 20, nmmax: int = 3, ask_path: str | Path | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
     """
     Targeted replacement for ASK process_alignment.
@@ -903,9 +766,7 @@ def target_process_alignment(
 
     with pysam.AlignmentFile(str(bam_path), "rb") as bam:
         for bp in bps.itertuples():
-            for read in fetch_reads_around_breakpoint(
-                bam, bp.Chrom1, bp.Coord1, bp.Chrom2, bp.Coord2, window
-            ):
+            for read in fetch_reads_around_breakpoint(bam, bp.Chrom1, bp.Coord1, bp.Chrom2, bp.Coord2, window):
                 key = (read.query_name, read.flag, read.reference_id, read.reference_start)
                 if key in seen:
                     continue
@@ -924,19 +785,12 @@ def target_process_alignment(
         "right": list2df_count_simple(right_clip, ["Chrom", "Coord", "Clip"]),
     }
     clip_bg = clip_to_bedgraph(bp_all)
-    bin_count = target_region_count(
-        bam_path,
-        target_chroms=target_chroms,
-        exclude_intervals=circular_df,
-        cn_background=cn_background,
-        binsize=binsize,
-        mapq=mapq,
-        nmmax=nmmax,
-    )
+    bin_count = target_region_count(bam_path, target_chroms=target_chroms, exclude_intervals=circular_df,
+        cn_background=cn_background, binsize=binsize, mapq=mapq, nmmax=nmmax)
     bp_duo_bam = getbppair.get_bp_pair(reads_with_sa, mapq=mapq) if reads_with_sa else pd.DataFrame()
     return bp_all, clip_bg, bin_count, bp_duo_bam, reads_with_sa
 
-
+#------------------------------------------------------------------------------#
 def clip_to_bedgraph(bp_all: dict[str, pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for side, sign in [("left", -1), ("right", 1)]:
@@ -947,16 +801,10 @@ def clip_to_bedgraph(bp_all: dict[str, pd.DataFrame]) -> pd.DataFrame:
             rows.append([row.Chrom, int(row.Coord), int(row.Coord) + 1, sign * int(row.Count)])
     return pd.DataFrame(rows, columns=["Chrom", "Start", "End", "Count"]).sort_values(["Chrom", "Start", "End"])
 
-
-def target_region_count(
-    bam_path: str | Path,
-    target_chroms: Iterable[str],
-    exclude_intervals: pd.DataFrame | None = None,
-    cn_background: str = "genome",
-    binsize: int = 10000,
-    mapq: int = 20,
-    nmmax: int = 3,
-) -> pd.DataFrame:
+#------------------------------------------------------------------------------#
+def target_region_count(bam_path: str | Path, target_chroms: Iterable[str],
+    exclude_intervals: pd.DataFrame | None = None, cn_background: str = "genome", binsize: int = 10000, mapq: int = 20,
+    nmmax: int = 3) -> pd.DataFrame:
     counts: dict[tuple[str, int], int] = {}
     norm_counts: dict[tuple[str, int], int] = {}
     target = set(map(str, target_chroms))
@@ -981,18 +829,10 @@ def target_region_count(
                 counts[key] = counts.get(key, 0) + 1
     if not counts:
         return pd.DataFrame(columns=["Chrom", "Coord", "Count", "CN"])
-    df = pd.DataFrame(
-        [(chrom, coord, count) for (chrom, coord), count in counts.items()],
-        columns=["Chrom", "Coord", "Count"],
-    ).sort_values(["Chrom", "Coord"])
-    norm_source = (
-        pd.DataFrame(
-            [(chrom, coord, count) for (chrom, coord), count in norm_counts.items()],
-            columns=["Chrom", "Coord", "Count"],
-        )
-        if norm_counts
-        else df
-    )
+    df = pd.DataFrame([(chrom, coord, count) for (chrom, coord), count in counts.items()],
+        columns=["Chrom", "Coord", "Count"]).sort_values(["Chrom", "Coord"])
+    norm_source = (pd.DataFrame([(chrom, coord, count) for (chrom, coord), count in norm_counts.items()],
+            columns=["Chrom", "Coord", "Count"]) if norm_counts else df)
     if cn_background != "genome" and exclude_intervals is not None and not exclude_intervals.empty:
         intervals = exclude_intervals[["Chrom", "Start", "End"]].drop_duplicates().copy()
         intervals["Chrom"] = intervals["Chrom"].astype(str)
@@ -1005,24 +845,17 @@ def target_region_count(
                 continue
             for row in sub.itertuples(index=False):
                 in_excluded |= chrom_mask & (df["Coord"].astype(int) < int(row.End)) & (
-                    df["Coord"].astype(int) + binsize > int(row.Start)
-                )
+                    df["Coord"].astype(int) + binsize > int(row.Start))
         if (~in_excluded).sum() >= 10:
             norm_source = df.loc[~in_excluded]
     mean_count = norm_source["Count"].mean()
     df["CN"] = 2 * df["Count"] / mean_count if mean_count else 0
     return df.reset_index(drop=True)
 
-
-def target_detect_amplified_segment(
-    bin_count: pd.DataFrame,
-    bp_all: dict[str, pd.DataFrame],
-    circular_df: pd.DataFrame,
-    binsize: int = 10000,
-    ask_path: str | Path | None = None,
-    min_cn: float | None = None,
-    min_segsize_scale: int = 1,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+#------------------------------------------------------------------------------#
+def target_detect_amplified_segment(bin_count: pd.DataFrame, bp_all: dict[str, pd.DataFrame],
+    circular_df: pd.DataFrame, binsize: int = 10000, ask_path: str | Path | None = None, min_cn: float | None = None,
+    min_segsize_scale: int = 1) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Targeted replacement for ASK detect_amplified_segment on ecDNA chromosomes.
 
@@ -1042,9 +875,7 @@ def target_detect_amplified_segment(
     try:
         cn_seg = cbs.cbs(bin_norm, binsize=binsize)
         cn_amp_raw = cbs.cbs_amplicon(cn_seg, min_cn=min_cn)
-        cn_amp_raw = cndetect.segment_filter_by_size(
-            cn_amp_raw, binsize=binsize, fold=min_segsize_scale
-        )
+        cn_amp_raw = cndetect.segment_filter_by_size(cn_amp_raw, binsize=binsize, fold=min_segsize_scale)
         cn_amp = cndetect.finemap_cn_segment_boundary(cn_amp_raw, bp_all, binsize=binsize)
     except Exception:
         cn_seg = pd.DataFrame()
@@ -1056,13 +887,9 @@ def target_detect_amplified_segment(
         cn_amp = ensure_cn_amp_annotation(cn_amp, circular_df)
     return cn_amp, cn_seg, bin_norm
 
-
-def known_segments_to_cn_amp(
-    circular_df: pd.DataFrame,
-    bin_norm: pd.DataFrame,
-    bp_all: dict[str, pd.DataFrame],
-    binsize: int = 10000,
-) -> pd.DataFrame:
+#------------------------------------------------------------------------------#
+def known_segments_to_cn_amp(circular_df: pd.DataFrame, bin_norm: pd.DataFrame, bp_all: dict[str, pd.DataFrame],
+    binsize: int = 10000) -> pd.DataFrame:
     rows = []
     grouped = circular_df.groupby(["Chrom", "Start", "End"], sort=False)
     for (chrom, start, end), sub in grouped:
@@ -1084,20 +911,17 @@ def known_segments_to_cn_amp(
         )
     return pd.DataFrame(rows)
 
-
+#------------------------------------------------------------------------------#
 def clip_count_at(bp_all: dict[str, pd.DataFrame], chrom: object, coord: object, clip: str, window: int = 2) -> int:
     side = "left" if clip == "L" else "right"
     df = bp_all.get(side, pd.DataFrame())
     if df.empty:
         return 0
-    sub = df[
-        (df["Chrom"].astype(str) == str(chrom))
-        & (df["Clip"].astype(str) == clip)
-        & ((df["Coord"].astype(int) - int(coord)).abs() <= window)
-    ]
+    sub = df[(df["Chrom"].astype(str) == str(chrom)) & (df["Clip"].astype(str) == clip)
+        & ((df["Coord"].astype(int) - int(coord)).abs() <= window)]
     return int(sub["Count"].sum()) if not sub.empty else 0
 
-
+#------------------------------------------------------------------------------#
 def ensure_cn_amp_annotation(cn_amp: pd.DataFrame, circular_df: pd.DataFrame) -> pd.DataFrame:
     out = cn_amp.copy()
     for col in ["Gene", "CancerGene"]:
@@ -1105,7 +929,7 @@ def ensure_cn_amp_annotation(cn_amp: pd.DataFrame, circular_df: pd.DataFrame) ->
             out[col] = ""
     return out
 
-
+#------------------------------------------------------------------------------#
 def known_breakpoint_seed_table(breakpoints: pd.DataFrame) -> pd.DataFrame:
     """
     Build ASK bp_duo_bam-like seeds from known ecDNA breakpoint pairs.
@@ -1134,24 +958,11 @@ def known_breakpoint_seed_table(breakpoints: pd.DataFrame) -> pd.DataFrame:
                 "BreakpointID": getattr(row, "BreakpointID", ""),
             }
         )
-    columns = [
-        "Chrom1",
-        "Coord1",
-        "Clip1",
-        "Chrom2",
-        "Coord2",
-        "Clip2",
-        "Count",
-        "offset",
-        "Seq",
-        "Readsname",
-        "Readsbarcode",
-        "CircleID",
-        "BreakpointID",
-    ]
+    columns = ["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq", "Readsname",
+        "Readsbarcode", "CircleID", "BreakpointID",]
     return pd.DataFrame(rows, columns=columns)
 
-
+#------------------------------------------------------------------------------#
 def bpduo_core_columns(df: pd.DataFrame) -> pd.DataFrame:
     columns = ["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq"]
     if df.empty:
@@ -1162,24 +973,13 @@ def bpduo_core_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = default
     return out[columns]
 
-
+#------------------------------------------------------------------------------#
 def bpduo_bam_seed_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keep columns and order expected by bpjoint.get_bppair(type=2).
     """
-    columns = [
-        "Chrom1",
-        "Coord1",
-        "Clip1",
-        "Chrom2",
-        "Coord2",
-        "Clip2",
-        "Count",
-        "offset",
-        "Seq",
-        "Readsname",
-        "Readsbarcode",
-    ]
+    columns = ["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq", "Readsname",
+        "Readsbarcode",]
     if df.empty:
         return pd.DataFrame(columns=columns)
     out = df.copy()
@@ -1188,7 +988,7 @@ def bpduo_bam_seed_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = default
     return out[columns]
 
-
+#------------------------------------------------------------------------------#
 def breakpoint_pair_close(row: pd.Series, seed: pd.Series, window: int) -> bool:
     direct = (
         breakpoint_end_matches(row["Chrom1"], row["Coord1"], row["Clip1"], seed["Chrom1"], seed["Coord1"], seed["Clip1"], window)
@@ -1200,7 +1000,7 @@ def breakpoint_pair_close(row: pd.Series, seed: pd.Series, window: int) -> bool:
     )
     return bool(direct or reverse)
 
-
+#------------------------------------------------------------------------------#
 def filter_bp_duo_to_known_windows(bp_duo: pd.DataFrame, known_seed: pd.DataFrame, window: int = 200) -> pd.DataFrame:
     if bp_duo.empty or known_seed.empty:
         return pd.DataFrame(columns=bp_duo.columns)
@@ -1211,20 +1011,10 @@ def filter_bp_duo_to_known_windows(bp_duo: pd.DataFrame, known_seed: pd.DataFram
     subset = ["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2"]
     return pd.DataFrame(rows).drop_duplicates(subset=subset).reset_index(drop=True) if rows else pd.DataFrame(columns=bp_duo.columns)
 
-
-def target_detect_bp_pair(
-    bam_path: str | Path,
-    known_seed: pd.DataFrame,
-    bp_duo_bam: pd.DataFrame,
-    bp_all: dict[str, pd.DataFrame],
-    cn_amp: pd.DataFrame,
-    binsize: int = 10000,
-    window: int = 200,
-    min_nt: int = 5,
-    mapq: int = 20,
-    nmmax: int = 3,
-    ask_path: str | Path | None = None,
-    include_sa_candidates: bool = True,
+#------------------------------------------------------------------------------#
+def target_detect_bp_pair(bam_path: str | Path, known_seed: pd.DataFrame, bp_duo_bam: pd.DataFrame,
+    bp_all: dict[str, pd.DataFrame], cn_amp: pd.DataFrame, binsize: int = 10000, window: int = 200, min_nt: int = 5,
+    mapq: int = 20, nmmax: int = 3, ask_path: str | Path | None = None, include_sa_candidates: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Targeted ASK breakpoint-pair step.
@@ -1244,14 +1034,8 @@ def target_detect_bp_pair(
     for _, seed_row in seed.iterrows():
         bp_cand_df = known_pair_to_bp_cand_df(seed_row)
         try:
-            pair_df = bpjoint.get_bppair(
-                str(bam_path),
-                bp_cand_df,
-                empty_seed,
-                min_nt=min_nt,
-                multi_process=False,
-                num_cores=1,
-            )
+            pair_df = bpjoint.get_bppair(str(bam_path), bp_cand_df, empty_seed, min_nt=min_nt, multi_process=False,
+                num_cores=1)
         except Exception:
             pair_df = pd.DataFrame()
         if not pair_df.empty:
@@ -1260,14 +1044,8 @@ def target_detect_bp_pair(
     if include_sa_candidates and not bp_duo_bam.empty:
         sa_near_known = filter_bp_duo_to_known_windows(bpduo_bam_seed_columns(bp_duo_bam), seed, window=window)
         if not sa_near_known.empty:
-            sa_pairs = bpjoint.get_bppair(
-                str(bam_path),
-                pd.DataFrame(columns=["Chrom", "Coord", "Clip", "Group"]),
-                sa_near_known,
-                min_nt=min_nt,
-                multi_process=False,
-                num_cores=1,
-            )
+            sa_pairs = bpjoint.get_bppair(str(bam_path), pd.DataFrame(columns=["Chrom", "Coord", "Clip", "Group"]),
+                sa_near_known, min_nt=min_nt, multi_process=False, num_cores=1)
             if not sa_pairs.empty:
                 assembled_pairs.append(sa_pairs)
     else:
@@ -1275,11 +1053,8 @@ def target_detect_bp_pair(
 
     if assembled_pairs:
         bp_duo = pd.concat([bpduo_core_columns(df) for df in assembled_pairs], ignore_index=True)
-        bp_duo = (
-            bp_duo.sort_values("Count", ascending=False)
-            .drop_duplicates(["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2"])
-            .reset_index(drop=True)
-        )
+        bp_duo = (bp_duo.sort_values("Count", ascending=False)
+            .drop_duplicates(["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2"]).reset_index(drop=True))
     else:
         bp_duo = pd.DataFrame(columns=["Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Count", "offset", "Seq"])
 
@@ -1289,18 +1064,13 @@ def target_detect_bp_pair(
         bp_cand_stats = bpdetect.refine_bp_cand_bam(bp_duo, bp_all)
     return bp_duo, bp_cand_stats, sa_near_known
 
-
+#------------------------------------------------------------------------------#
 def seed_to_bp_cand_stats(seed: pd.DataFrame, bp_all: dict[str, pd.DataFrame]) -> pd.DataFrame:
     cols = ["Chrom", "Coord", "Clip"]
     if seed.empty:
         return pd.DataFrame(columns=cols + ["CleanBP", "ClipDepth", "InDepth", "OutDepth"])
-    bp_df = pd.concat(
-        [
-            seed[["Chrom1", "Coord1", "Clip1"]].set_axis(cols, axis=1),
-            seed[["Chrom2", "Coord2", "Clip2"]].set_axis(cols, axis=1),
-        ],
-        ignore_index=True,
-    ).drop_duplicates()
+    bp_df = pd.concat([seed[["Chrom1", "Coord1", "Clip1"]].set_axis(cols, axis=1),
+            seed[["Chrom2", "Coord2", "Clip2"]].set_axis(cols, axis=1),], ignore_index=True).drop_duplicates()
     rows = []
     for row in bp_df.itertuples():
         rows.append(
@@ -1316,7 +1086,7 @@ def seed_to_bp_cand_stats(seed: pd.DataFrame, bp_all: dict[str, pd.DataFrame]) -
         )
     return pd.DataFrame(rows)
 
-
+#------------------------------------------------------------------------------#
 def known_pair_to_bp_cand_df(seed_row: pd.Series) -> pd.DataFrame:
     """
     Convert one known breakpoint pair into the bp_cand_df shape ASK assembles.
@@ -1338,56 +1108,20 @@ def known_pair_to_bp_cand_df(seed_row: pd.Series) -> pd.DataFrame:
         ]
     )
 
-
+#------------------------------------------------------------------------------#
 def empty_amplicon_outputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     circ_cols = ["Chrom", "Start", "End", "Strand", "SplitCount", "CN", "AmpliconID", "Gene"]
-    score_cols = [
-        "AmpliconID",
-        "Chrom1",
-        "Start",
-        "Chrom2",
-        "End",
-        "Seg_num",
-        "Length",
-        "SplitCount_sum",
-        "SplitCount_mean",
-        "SplitCount_std",
-        "CN_sum",
-        "CN_mean",
-        "CN_std",
-        "FCleft_sum",
-        "FCright_sum",
-        "invCNCV_sum",
-        "invCNCV_mean",
-        "invSplitCV",
-        "Gene_num",
-        "Cancergene_num",
-        "SE_num",
-        "FCleft_mean_1",
-        "FCright_mean_1",
-        "Score",
-    ]
-    return (
-        pd.DataFrame(columns=circ_cols),
-        pd.DataFrame(columns=circ_cols),
-        pd.DataFrame(),
-        pd.DataFrame(),
-        pd.DataFrame(columns=score_cols),
-        pd.DataFrame(),
-    )
+    score_cols = ["AmpliconID", "Chrom1", "Start", "Chrom2", "End", "Seg_num", "Length", "SplitCount_sum",
+        "SplitCount_mean", "SplitCount_std", "CN_sum", "CN_mean", "CN_std", "FCleft_sum", "FCright_sum", "invCNCV_sum",
+        "invCNCV_mean", "invSplitCV", "Gene_num", "Cancergene_num", "SE_num", "FCleft_mean_1", "FCright_mean_1",
+        "Score",]
+    return (pd.DataFrame(columns=circ_cols), pd.DataFrame(columns=circ_cols), pd.DataFrame(), pd.DataFrame(),
+        pd.DataFrame(columns=score_cols), pd.DataFrame(),)
 
-
-def target_construct_amplicon(
-    bp_duo: pd.DataFrame,
-    bp_cand_stats: pd.DataFrame,
-    cn_amp: pd.DataFrame,
-    bin_norm: pd.DataFrame,
-    known_single_segments: pd.DataFrame | None = None,
-    min_junc_cnt: int = 1,
-    bpp_min_dist: int = 50,
-    segment_restrict: bool = False,
-    subseg: bool = True,
-    rm_amp_df: bool = False,
+#------------------------------------------------------------------------------#
+def target_construct_amplicon(bp_duo: pd.DataFrame, bp_cand_stats: pd.DataFrame, cn_amp: pd.DataFrame,
+    bin_norm: pd.DataFrame, known_single_segments: pd.DataFrame | None = None, min_junc_cnt: int = 1,
+    bpp_min_dist: int = 50, segment_restrict: bool = False, subseg: bool = True, rm_amp_df: bool = False,
     ask_path: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -1407,20 +1141,22 @@ def target_construct_amplicon(
             cn_amp_use[col] = "" if col in {"Gene", "CancerGene"} else 0
     cn_amp_use = cn_amp_use[cn_cols]
 
-    bp_pair = bppair.bp_pair_filter(bpduo_core_columns(bp_duo), bpp_min_dist, min_junc_cnt)
+    bp_pair = bppair.bp_pair_filter(
+        bpduo_core_columns(bp_duo),
+        cn_amp=cn_amp_use,
+        bp_cand_stats=bp_cand_stats,
+        short_distance=bpp_min_dist,
+        min_junc_cnt=min_junc_cnt,
+    )
     if bp_pair.empty:
         empty = empty_amplicon_outputs()
         return empty[0], empty[1], bp_pair, empty[3], empty[4], empty[5]
 
     bp_fine, cn_amp_merged = bppair.bp_refine(bp_pair, bp_cand_stats, cn_amp_use)
-    seg = bppair.get_segment(
-        bp_fine,
-        bp_pair,
-        cn_amp_merged,
-        restrict=segment_restrict,
-        subseg=subseg,
-        rm_amp_df=rm_amp_df,
-    )
+    # Preserve the legacy targeted-search neighborhood independently of
+    # get_segment's default used by other workflows.
+    seg = bppair.get_segment(bp_fine, bp_pair, cn_amp_merged, restrict=segment_restrict, subseg=subseg,
+        rm_amp_df=rm_amp_df, knn=3)
     if not seg.empty:
         seg = bppair.add_cn(seg, cn_amp_use, bin_norm)
 
@@ -1434,19 +1170,10 @@ def target_construct_amplicon(
         col_sel = ["Chrom", "Start", "End", "Strand", "SplitCount", "CN"]
         single_circ = pd.DataFrame(gg.single_segment_loop, columns=col_sel)
         if not single_circ.empty:
-            single_key = set(
-                zip(
-                    known_single_segments["Chrom"].astype(str),
-                    known_single_segments["Start"].astype(int),
-                    known_single_segments["End"].astype(int),
-                )
-            )
-            single_circ = single_circ[
-                [
-                    (str(row.Chrom), int(row.Start), int(row.End)) in single_key
-                    for row in single_circ.itertuples()
-                ]
-            ].copy()
+            single_key = set(zip(known_single_segments["Chrom"].astype(str),
+                    known_single_segments["Start"].astype(int), known_single_segments["End"].astype(int)))
+            single_circ = single_circ[[(str(row.Chrom), int(row.Start), int(row.End)) in single_key
+                    for row in single_circ.itertuples()]].copy()
         if not single_circ.empty:
             if not circ_anno.empty:
                 existing = circ_anno[col_sel].drop_duplicates()
@@ -1474,7 +1201,7 @@ def target_construct_amplicon(
 
     return circ_anno, line_anno, bp_pair, seg, circ_score, bp_fine
 
-
+#------------------------------------------------------------------------------#
 def add_read_to_ask_sa_group(read, reads_with_sa: dict, mapq: int = 0, nmmax: int = 3) -> None:
     """
     Build the reads_with_SA structure expected by ASK getbppair.get_bp_pair.
@@ -1500,14 +1227,9 @@ def add_read_to_ask_sa_group(read, reads_with_sa: dict, mapq: int = 0, nmmax: in
     else:
         readp.setdefault("single", []).append(read)
 
-
-def collect_ask_sa_reads_for_known_breakpoints(
-    breakpoints: pd.DataFrame,
-    bam_path: str | Path,
-    window: int = 200,
-    mapq: int = 0,
-    nmmax: int = 3,
-) -> dict:
+#------------------------------------------------------------------------------#
+def collect_ask_sa_reads_for_known_breakpoints(breakpoints: pd.DataFrame, bam_path: str | Path, window: int = 200,
+    mapq: int = 0, nmmax: int = 3) -> dict:
     """
     Collect only reads near known breakpoint pairs, reducing ASK search space.
     """
@@ -1515,24 +1237,23 @@ def collect_ask_sa_reads_for_known_breakpoints(
         raise ImportError("pysam is required for BAM-based ASK-search.")
     reads_with_sa: dict = {}
     bam_path = Path(bam_path)
+    # FIX(20260717): dedup reads across breakpoints. Overlapping +/-window regions
+    #   fetch the same read multiple times; fetch_reads_around_breakpoint's seen set
+    #   is fresh per call, so without a persistent seen set a read is added to the SA
+    #   group repeatedly, inflating split-read support. Mirror target_process_alignment.
+    seen: set = set()
     with pysam.AlignmentFile(str(bam_path), "rb") as bam:
         for bp in breakpoints.itertuples():
-            for read in fetch_reads_around_breakpoint(
-                bam,
-                bp.Chrom1,
-                bp.Coord1,
-                bp.Chrom2,
-                bp.Coord2,
-                window,
-            ):
+            for read in fetch_reads_around_breakpoint(bam, bp.Chrom1, bp.Coord1, bp.Chrom2, bp.Coord2, window):
+                key = (read.query_name, read.flag, read.reference_id, read.reference_start)
+                if key in seen:
+                    continue
+                seen.add(key)
                 add_read_to_ask_sa_group(read, reads_with_sa, mapq=mapq, nmmax=nmmax)
     return reads_with_sa
 
-
-def match_bp_duo_to_known_breakpoints(
-    bp_duo: pd.DataFrame,
-    breakpoints: pd.DataFrame,
-    window: int = 200,
+#------------------------------------------------------------------------------#
+def match_bp_duo_to_known_breakpoints(bp_duo: pd.DataFrame, breakpoints: pd.DataFrame, window: int = 200,
 ) -> pd.DataFrame:
     """
     Match ASK breakpoint-pair candidates to known ecDNA breakpoint pairs.
@@ -1577,7 +1298,7 @@ def match_bp_duo_to_known_breakpoints(
         return pd.DataFrame()
     return pd.DataFrame(rows).drop_duplicates(["CircleID", "BreakpointID", "Chrom1", "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2"])
 
-
+#------------------------------------------------------------------------------#
 def levenshtein_distance(a: object, b: object) -> int:
     """
     Compute Levenshtein edit distance for short junction sequences.
@@ -1592,17 +1313,11 @@ def levenshtein_distance(a: object, b: object) -> int:
     for i, char1 in enumerate(s1, start=1):
         current = [i]
         for j, char2 in enumerate(s2, start=1):
-            current.append(
-                min(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + int(char1 != char2),
-                )
-            )
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + int(char1 != char2)))
         previous = current
     return previous[-1]
 
-
+#------------------------------------------------------------------------------#
 def normalized_levenshtein(a: object, b: object) -> float:
     s1 = "" if pd.isna(a) else str(a)
     s2 = "" if pd.isna(b) else str(b)
@@ -1610,7 +1325,7 @@ def normalized_levenshtein(a: object, b: object) -> float:
         return 0.0
     return levenshtein_distance(s1.upper(), s2.upper()) / max(len(s1), len(s2), 1)
 
-
+#------------------------------------------------------------------------------#
 def junction_sequence_match(query_seq: object, ref_seq: object, max_norm_dist: float = 0.1) -> bool:
     if pd.isna(query_seq) or pd.isna(ref_seq):
         return False
@@ -1620,14 +1335,9 @@ def junction_sequence_match(query_seq: object, ref_seq: object, max_norm_dist: f
         return False
     return normalized_levenshtein(query, ref) <= max_norm_dist
 
-
-def compute_jcs_tables(
-    reference_junctions: pd.DataFrame,
-    candidate_junctions: pd.DataFrame,
-    window: int = 200,
-    min_support_reads: int = 5,
-    jcs_threshold: float = 0.5,
-    max_norm_dist: float = 0.1,
+#------------------------------------------------------------------------------#
+def compute_jcs_tables(reference_junctions: pd.DataFrame, candidate_junctions: pd.DataFrame, window: int = 200,
+    min_support_reads: int = 5, jcs_threshold: float = 0.5, max_norm_dist: float = 0.1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Compute Junction Concordance Score against the input reference structure.
@@ -1667,7 +1377,12 @@ def compute_jcs_tables(
                 }
             )
         best = max(matches, key=lambda item: item["Count"], default={})
-        support_count = int(best.get("Count", 0) or 0)
+        # FIX(20260717): a reference junction may match several candidates
+        #   (get_bp_pair can split into multiple rows within window); support should
+        #   be the sum over matches, not the single max (else true support is
+        #   underestimated -> false negatives). `best` is kept only for the
+        #   representative BestSeq/Matched* fields below.
+        support_count = sum(int(m.get("Count", 0) or 0) for m in matches)
         validated = support_count >= min_support_reads
         rows.append(
             {
@@ -1696,31 +1411,22 @@ def compute_jcs_tables(
             }
         )
     junction_table = pd.DataFrame(rows)
-    summary = (
-        junction_table.groupby("CircleID", dropna=False, sort=False)
-        .agg(
-            total_reference_junctions=("BreakpointID", "nunique"),
-            validated_junctions=("Validated", "sum"),
-            total_support_reads=("SupportReadCount", "sum"),
-        )
-        .reset_index()
-    )
+    summary = (junction_table.groupby("CircleID", dropna=False, sort=False).agg(
+            total_reference_junctions=("BreakpointID", "nunique"), validated_junctions=("Validated", "sum"),
+            total_support_reads=("SupportReadCount", "sum")).reset_index())
     summary["JCS"] = summary["validated_junctions"] / summary["total_reference_junctions"]
-    summary["Detected"] = summary["JCS"] > jcs_threshold
+    # FIX(20260717): min_jcs is a minimum threshold, consistent with the >= used for
+    #   read validation; the old > dropped circles exactly at the threshold (e.g. a
+    #   2-junction circle with 1 validated => JCS=0.5 missed at default 0.5).
+    summary["Detected"] = summary["JCS"] >= jcs_threshold
     summary["MinSupportReads"] = min_support_reads
     summary["JCSThreshold"] = jcs_threshold
     summary["MaxNormalizedLevenshtein"] = max_norm_dist
     return junction_table, summary
 
-
-def search_known_bppairs_from_bam(
-    breakpoints: pd.DataFrame,
-    bam_path: str | Path,
-    window: int = 200,
-    mapq: int = 20,
-    nmmax: int = 3,
-    ask_path: str | Path | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+#------------------------------------------------------------------------------#
+def search_known_bppairs_from_bam(breakpoints: pd.DataFrame, bam_path: str | Path, window: int = 200, mapq: int = 20,
+    nmmax: int = 3, ask_path: str | Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Targeted ASK-style breakpoint-pair search.
 
@@ -1731,13 +1437,8 @@ def search_known_bppairs_from_bam(
     """
     getbppair = load_ask_getbppair(ask_path)
     bps = infer_clip_from_known_breakpoints(breakpoints)
-    reads_with_sa = collect_ask_sa_reads_for_known_breakpoints(
-        bps,
-        bam_path=bam_path,
-        window=window,
-        mapq=0,
-        nmmax=nmmax,
-    )
+    reads_with_sa = collect_ask_sa_reads_for_known_breakpoints(bps, bam_path=bam_path, window=window, mapq=0,
+        nmmax=nmmax)
     if reads_with_sa:
         bp_duo = getbppair.get_bp_pair(reads_with_sa, mapq=mapq)
     else:
@@ -1745,7 +1446,7 @@ def search_known_bppairs_from_bam(
     matched = match_bp_duo_to_known_breakpoints(bp_duo, bps, window=window)
     return matched, bp_duo
 
-
+#------------------------------------------------------------------------------#
 def cigar_ref_length(cigar: str) -> int:
     """Reference-consuming length for a CIGAR string."""
     length = 0
@@ -1754,7 +1455,7 @@ def cigar_ref_length(cigar: str) -> int:
             length += int(size)
     return length
 
-
+#------------------------------------------------------------------------------#
 def sa_clip_side(sa: dict[str, object]) -> tuple[str, int] | tuple[None, None]:
     cigar = str(sa["cigar"])
     if not cigar:
@@ -1769,42 +1470,26 @@ def sa_clip_side(sa: dict[str, object]) -> tuple[str, int] | tuple[None, None]:
         return "R", end
     return None, None
 
-
+#------------------------------------------------------------------------------#
 def coord_close(a: object, b: object, window: int) -> bool:
     return abs(int(a) - int(b)) <= window
 
+#------------------------------------------------------------------------------#
+def breakpoint_end_matches(observed_chrom: object, observed_coord: object, observed_clip: object, target_chrom: object,
+    target_coord: object, target_clip: object, window: int) -> bool:
+    return (str(observed_chrom) == str(target_chrom) and str(observed_clip) == str(target_clip)
+        and coord_close(observed_coord, target_coord, window))
 
-def breakpoint_end_matches(
-    observed_chrom: object,
-    observed_coord: object,
-    observed_clip: object,
-    target_chrom: object,
-    target_coord: object,
-    target_clip: object,
-    window: int,
-) -> bool:
-    return (
-        str(observed_chrom) == str(target_chrom)
-        and str(observed_clip) == str(target_clip)
-        and coord_close(observed_coord, target_coord, window)
-    )
-
-
-def known_breakpoint_match(
-    obs1: tuple[object, object, object],
-    obs2: tuple[object, object, object],
-    bp: pd.Series,
-    window: int,
-) -> bool:
+#------------------------------------------------------------------------------#
+def known_breakpoint_match(obs1: tuple[object, object, object], obs2: tuple[object, object, object], bp: pd.Series,
+    window: int) -> bool:
     direct = breakpoint_end_matches(*obs1, bp["Chrom1"], bp["Coord1"], bp["Clip1"], window) and breakpoint_end_matches(
-        *obs2, bp["Chrom2"], bp["Coord2"], bp["Clip2"], window
-    )
+        *obs2, bp["Chrom2"], bp["Coord2"], bp["Clip2"], window)
     reverse = breakpoint_end_matches(*obs1, bp["Chrom2"], bp["Coord2"], bp["Clip2"], window) and breakpoint_end_matches(
-        *obs2, bp["Chrom1"], bp["Coord1"], bp["Clip1"], window
-    )
+        *obs2, bp["Chrom1"], bp["Coord1"], bp["Clip1"], window)
     return bool(direct or reverse)
 
-
+#------------------------------------------------------------------------------#
 def fetch_reads_around_breakpoint(bam, chrom1, coord1, chrom2, coord2, window: int):
     seen = set()
     for chrom, coord in [(chrom1, coord1), (chrom2, coord2)]:
@@ -1817,15 +1502,9 @@ def fetch_reads_around_breakpoint(bam, chrom1, coord1, chrom2, coord2, window: i
             seen.add(key)
             yield read
 
-
-def search_known_breakpoints_in_bam(
-    breakpoints: pd.DataFrame,
-    bam_path: str | Path,
-    window: int = 200,
-    mapq: int = 20,
-    nmmax: int = 3,
-    barcode_tags: Iterable[str] = ("CB", "CR", "BX", "BC"),
-    include_normal: bool = True,
+#------------------------------------------------------------------------------#
+def search_known_breakpoints_in_bam(breakpoints: pd.DataFrame, bam_path: str | Path, window: int = 200, mapq: int = 20,
+    nmmax: int = 3, barcode_tags: Iterable[str] = ("CB", "CR", "BX", "BC"), include_normal: bool = True,
 ) -> pd.DataFrame:
     """
     Search a query BAM for evidence supporting known ecDNA breakpoint pairs.
@@ -1863,21 +1542,11 @@ def search_known_breakpoints_in_bam(
                         continue
                     sa_obs = (sa["chrom"], sa_coord, sa_side)
                     if known_breakpoint_match(primary_obs, sa_obs, bp, window):
-                        rows.append(
-                            bam_evidence_row(
-                                bp,
-                                bam_path,
-                                read,
-                                "split_SA",
-                                read_barcode(read, barcode_tags),
-                                mate_chrom=sa["chrom"],
-                                mate_coord=sa_coord,
-                                mate_clip=sa_side,
-                                mate_cigar=sa["cigar"],
+                        rows.append(bam_evidence_row(bp, bam_path, read, "split_SA", read_barcode(read, barcode_tags),
+                                mate_chrom=sa["chrom"], mate_coord=sa_coord, mate_clip=sa_side, mate_cigar=sa["cigar"],
                                 distance_to_bp1=min(abs(int(primary_obs[1]) - int(bp["Coord1"])), abs(int(sa_obs[1]) - int(bp["Coord1"]))),
-                                distance_to_bp2=min(abs(int(primary_obs[1]) - int(bp["Coord2"])), abs(int(sa_obs[1]) - int(bp["Coord2"]))),
-                            )
-                        )
+                                distance_to_bp2=min(abs(int(primary_obs[1]) - int(bp["Coord2"])), abs(int(sa_obs[1]) - int(bp["Coord2"])))
+                            ))
                         matched = True
                         break
 
@@ -1888,75 +1557,29 @@ def search_known_breakpoints_in_bam(
                     side1 = breakpoint_end_matches(*primary_obs, bp["Chrom1"], bp["Coord1"], bp["Clip1"], window)
                     side2 = breakpoint_end_matches(*primary_obs, bp["Chrom2"], bp["Coord2"], bp["Clip2"], window)
                     if side1 or side2:
-                        rows.append(
-                            bam_evidence_row(
-                                bp,
-                                bam_path,
-                                read,
-                                "single_clip",
+                        rows.append(bam_evidence_row(bp, bam_path, read, "single_clip",
                                 read_barcode(read, barcode_tags),
                                 distance_to_bp1=abs(int(primary_obs[1]) - int(bp["Coord1"])),
-                                distance_to_bp2=abs(int(primary_obs[1]) - int(bp["Coord2"])),
-                            )
-                        )
+                                distance_to_bp2=abs(int(primary_obs[1]) - int(bp["Coord2"]))))
                         continue
 
                 if include_normal:
                     spans_bp1 = str(read.reference_name) == str(bp["Chrom1"]) and read.reference_start <= int(bp["Coord1"]) <= read.reference_end
                     spans_bp2 = str(read.reference_name) == str(bp["Chrom2"]) and read.reference_start <= int(bp["Coord2"]) <= read.reference_end
                     if spans_bp1 or spans_bp2:
-                        rows.append(
-                            bam_evidence_row(
-                                bp,
-                                bam_path,
-                                read,
-                                "normal_spanning",
-                                read_barcode(read, barcode_tags),
-                                breakpoint_side="Bp1" if spans_bp1 else "Bp2",
-                            )
-                        )
+                        rows.append(bam_evidence_row(bp, bam_path, read, "normal_spanning",
+                                read_barcode(read, barcode_tags), breakpoint_side="Bp1" if spans_bp1 else "Bp2"))
 
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "CircleID",
-                "AmpliconID",
-                "Filename",
-                "SampleID",
-                "BreakpointID",
-                "Chrom1",
-                "Coord1",
-                "Clip1",
-                "Chrom2",
-                "Coord2",
-                "Clip2",
-                "Gene",
-                "CancerGene",
-                "Bam",
-                "Readname",
-                "Barcode",
-                "support_type",
-                "MAPQ",
-                "NM",
-                "CIGAR",
-            ]
-        )
+        return pd.DataFrame(columns=["CircleID", "AmpliconID", "Filename", "SampleID", "BreakpointID", "Chrom1",
+                "Coord1", "Clip1", "Chrom2", "Coord2", "Clip2", "Gene", "CancerGene", "Bam", "Readname", "Barcode",
+                "support_type", "MAPQ", "NM", "CIGAR",])
     return pd.DataFrame(rows).drop_duplicates()
 
-
-def bam_evidence_row(
-    bp: pd.Series,
-    bam_path: Path,
-    read,
-    support_type: str,
-    barcode: object,
-    mate_chrom: object = None,
-    mate_coord: object = None,
-    mate_clip: object = None,
-    mate_cigar: object = None,
-    distance_to_bp1: object = None,
-    distance_to_bp2: object = None,
-    breakpoint_side: object = None,
+#------------------------------------------------------------------------------#
+def bam_evidence_row(bp: pd.Series, bam_path: Path, read, support_type: str, barcode: object,
+    mate_chrom: object = None, mate_coord: object = None, mate_clip: object = None, mate_cigar: object = None,
+    distance_to_bp1: object = None, distance_to_bp2: object = None, breakpoint_side: object = None,
 ) -> dict[str, object]:
     clip_side, clip_coord = read_clip_side(read)
     return {
@@ -1994,12 +1617,9 @@ def bam_evidence_row(
         "distance_to_bp2": distance_to_bp2,
     }
 
-
-def evidence_from_targeted_bppair_matches(
-    matched_pairs: pd.DataFrame,
-    bam_path: str | Path,
-    barcode_lookup: dict[str, object] | None = None,
-) -> pd.DataFrame:
+#------------------------------------------------------------------------------#
+def evidence_from_targeted_bppair_matches(matched_pairs: pd.DataFrame, bam_path: str | Path,
+    barcode_lookup: dict[str, object] | None = None) -> pd.DataFrame:
     """
     Expand matched ASK bp-pair rows into read-level evidence.
     """
@@ -2007,13 +1627,25 @@ def evidence_from_targeted_bppair_matches(
     if matched_pairs.empty:
         return pd.DataFrame()
     for _, row in matched_pairs.iterrows():
-        readnames = list(dict.fromkeys(parse_list_cell(row.get("Readsname", []))))
-        readbarcodes = parse_list_cell(row.get("Readsbarcode", []))
-        if not readnames and readbarcodes:
-            readnames = [None] * len(readbarcodes)
-        if len(readbarcodes) < len(readnames):
-            readbarcodes.extend([None] * (len(readnames) - len(readbarcodes)))
-        if not readnames:
+        raw_names = parse_list_cell(row.get("Readsname", []))
+        raw_barcodes = parse_list_cell(row.get("Readsbarcode", []))
+        if len(raw_barcodes) < len(raw_names):
+            raw_barcodes.extend([None] * (len(raw_names) - len(raw_barcodes)))
+        # FIX(20260717): when deduping read names, barcodes must be deduped together
+        #   with their read name; the old code deduped readnames only (dict.fromkeys)
+        #   but not readbarcodes, so positional pairing shifted and assigned wrong
+        #   barcodes whenever a read name was duplicated.
+        if raw_names:
+            paired = {}
+            for nm, bc in zip(raw_names, raw_barcodes):
+                if nm not in paired:
+                    paired[nm] = bc
+            readnames = list(paired.keys())
+            readbarcodes = list(paired.values())
+        elif raw_barcodes:
+            readnames = [None] * len(raw_barcodes)
+            readbarcodes = list(raw_barcodes)
+        else:
             readnames = [None]
             readbarcodes = [None]
         for read_idx, readname in enumerate(readnames):
@@ -2050,12 +1682,9 @@ def evidence_from_targeted_bppair_matches(
             )
     return pd.DataFrame(rows)
 
-
-def collect_read_barcodes_from_bam(
-    bam_path: str | Path,
-    readnames: Iterable[str],
-    barcode_tags: Iterable[str] = ("CB", "CR", "BX", "BC"),
-) -> dict[str, object]:
+#------------------------------------------------------------------------------#
+def collect_read_barcodes_from_bam(bam_path: str | Path, readnames: Iterable[str],
+    barcode_tags: Iterable[str] = ("CB", "CR", "BX", "BC")) -> dict[str, object]:
     """
     Resolve read names to barcode tags by scanning the BAM once.
     """
@@ -2073,12 +1702,8 @@ def collect_read_barcodes_from_bam(
                     break
     return out
 
-
-def genome_bin_count_from_bam(
-    bam_path: str | Path,
-    binsize: int = 10000,
-    mapq: int = 20,
-    nmmax: int = 3,
+#------------------------------------------------------------------------------#
+def genome_bin_count_from_bam(bam_path: str | Path, binsize: int = 10000, mapq: int = 20, nmmax: int = 3,
 ) -> pd.DataFrame:
     """
     ASK-style genome bin read count and CN normalization.
@@ -2098,23 +1723,14 @@ def genome_bin_count_from_bam(
             counts[key] = counts.get(key, 0) + 1
     if not counts:
         return pd.DataFrame(columns=["Chrom", "Coord", "Count", "CN"])
-    df = pd.DataFrame(
-        [(chrom, coord, count) for (chrom, coord), count in counts.items()],
-        columns=["Chrom", "Coord", "Count"],
-    ).sort_values(["Chrom", "Coord"])
+    df = pd.DataFrame([(chrom, coord, count) for (chrom, coord), count in counts.items()],
+        columns=["Chrom", "Coord", "Count"]).sort_values(["Chrom", "Coord"])
     mean_count = df["Count"].mean()
     df["CN"] = 2 * df["Count"] / mean_count if mean_count else 0
     return df.reset_index(drop=True)
 
-
-def count_reads_in_interval(
-    bam,
-    chrom: object,
-    start: object,
-    end: object,
-    mapq: int = 20,
-    nmmax: int = 3,
-) -> int:
+#------------------------------------------------------------------------------#
+def count_reads_in_interval(bam, chrom: object, start: object, end: object, mapq: int = 20, nmmax: int = 3) -> int:
     """
     Count filtered reads overlapping an interval.
 
@@ -2131,7 +1747,7 @@ def count_reads_in_interval(
         seen.add(key)
     return len(seen)
 
-
+#------------------------------------------------------------------------------#
 def weighted_cn_for_interval(bin_count: pd.DataFrame, chrom: object, start: object, end: object, binsize: int) -> tuple[float | None, int]:
     """
     Weighted mean CN over bins overlapping one segment.
@@ -2140,11 +1756,8 @@ def weighted_cn_for_interval(bin_count: pd.DataFrame, chrom: object, start: obje
         return None, 0
     start0 = max(0, int(start) - 1)
     end0 = int(end)
-    sub = bin_count[
-        (bin_count["Chrom"].astype(str) == str(chrom))
-        & (bin_count["Coord"] < end0)
-        & ((bin_count["Coord"] + binsize) > start0)
-    ].copy()
+    sub = bin_count[(bin_count["Chrom"].astype(str) == str(chrom)) & (bin_count["Coord"] < end0)
+        & ((bin_count["Coord"] + binsize) > start0)].copy()
     if sub.empty:
         return None, 0
     overlaps = []
@@ -2159,15 +1772,9 @@ def weighted_cn_for_interval(bin_count: pd.DataFrame, chrom: object, start: obje
     cn = float((sub["CN"] * sub["OverlapBp"]).sum() / total)
     return cn, int(sub.shape[0])
 
-
-def estimate_segment_copy_number(
-    circular_df: pd.DataFrame,
-    bam_path: str | Path,
-    binsize: int = 10000,
-    mapq: int = 20,
-    nmmax: int = 3,
-    bin_count: pd.DataFrame | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+#------------------------------------------------------------------------------#
+def estimate_segment_copy_number(circular_df: pd.DataFrame, bam_path: str | Path, binsize: int = 10000, mapq: int = 20,
+    nmmax: int = 3, bin_count: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Estimate copy number for each known ecDNA segment in the query BAM.
 
@@ -2181,13 +1788,7 @@ def estimate_segment_copy_number(
     rows: list[dict[str, object]] = []
     with pysam.AlignmentFile(str(bam_path), "rb") as bam:
         for idx, seg in circular_df.reset_index(drop=True).iterrows():
-            direct_count = count_reads_in_interval(
-                bam,
-                seg["Chrom"],
-                seg["Start"],
-                seg["End"],
-                mapq=mapq,
-                nmmax=nmmax,
+            direct_count = count_reads_in_interval(bam, seg["Chrom"], seg["Start"], seg["End"], mapq=mapq, nmmax=nmmax
             )
             length = max(1, int(seg["End"]) - int(seg["Start"]) + 1)
             cn, n_bins = weighted_cn_for_interval(bin_count, seg["Chrom"], seg["Start"], seg["End"], binsize)
@@ -2213,7 +1814,7 @@ def estimate_segment_copy_number(
             )
     return pd.DataFrame(rows), bin_count
 
-
+#------------------------------------------------------------------------------#
 def summarize_circle_copy_number(segment_cn: pd.DataFrame) -> pd.DataFrame:
     """
     Summarize segment copy-number estimates at circle level.
@@ -2221,31 +1822,18 @@ def summarize_circle_copy_number(segment_cn: pd.DataFrame) -> pd.DataFrame:
     if segment_cn.empty:
         return pd.DataFrame()
     df = segment_cn.copy()
-    summary = (
-        df.groupby(["CircleID", "AmpliconID", "Filename"], dropna=False)
-        .agg(
-            Chrom=("Chrom", lambda x: ";".join(sorted(set(map(str, x))))),
-            Start=("Start", "min"),
-            End=("End", "max"),
-            Seg_num=("SegmentIndex", "count"),
-            Length=("Length", "sum"),
-            ReadCount_sum=("ReadCount", "sum"),
-            ReadCount_mean=("ReadCount", "mean"),
-            ReadsPerKb_mean=("ReadsPerKb", "mean"),
-            CN_mean=("CN", "mean"),
-            CN_median=("CN", "median"),
-            CN_std=("CN", "std"),
-            CN_min=("CN", "min"),
-            CN_max=("CN", "max"),
+    summary = (df.groupby(["CircleID", "AmpliconID", "Filename"], dropna=False).agg(
+            Chrom=("Chrom", lambda x: ";".join(sorted(set(map(str, x))))), Start=("Start", "min"), End=("End", "max"),
+            Seg_num=("SegmentIndex", "count"), Length=("Length", "sum"), ReadCount_sum=("ReadCount", "sum"),
+            ReadCount_mean=("ReadCount", "mean"), ReadsPerKb_mean=("ReadsPerKb", "mean"), CN_mean=("CN", "mean"),
+            CN_median=("CN", "median"), CN_std=("CN", "std"), CN_min=("CN", "min"), CN_max=("CN", "max"),
             Gene_num=("Gene", lambda x: len(set(g for v in x.dropna() for g in split_genes(v)))),
-            Cancergene_num=("CancerGene", lambda x: len(set(g for v in x.dropna() for g in split_genes(v)))),
-        )
-        .reset_index()
-    )
+            Cancergene_num=("CancerGene", lambda x: len(set(g for v in x.dropna() for g in split_genes(v)))))
+        .reset_index())
     summary["CN_std"] = summary["CN_std"].fillna(0)
     return summary
 
-
+#------------------------------------------------------------------------------#
 def load_read_barcode_tables(paths: Iterable[str | Path]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for path in paths:
@@ -2265,11 +1853,8 @@ def load_read_barcode_tables(paths: Iterable[str | Path]) -> pd.DataFrame:
     require_columns(out, ["ReadID", "Barcode"])
     return out
 
-
-def find_junction_evidence(
-    breakpoints: pd.DataFrame,
-    bp_pair: pd.DataFrame,
-    read_barcodes: pd.DataFrame | None = None,
+#------------------------------------------------------------------------------#
+def find_junction_evidence(breakpoints: pd.DataFrame, bp_pair: pd.DataFrame, read_barcodes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Match circular breakpoint pairs to ASK breakpoint-pair rows and expand
@@ -2304,23 +1889,21 @@ def find_junction_evidence(
                     barcode_rows = read_lookup.get_group(readname)
 
                 if barcode_rows is None or barcode_rows.empty:
-                    rows.append(evidence_row(bp, readname, ask_barcode, None, None))
+                    # FIX(20260717): with no external read->barcode table, fall back
+                    #   to ASK's own Readbarcode (ask_barcode) for cell assignment,
+                    #   otherwise single-cell barcodes are dropped and build_matrices
+                    #   filters everything out. Bulk data has ask_barcode=None -> stays
+                    #   None (behavior unchanged).
+                    rows.append(evidence_row(bp, readname, ask_barcode, ask_barcode, None))
                     continue
 
                 for barcode_row in barcode_rows.itertuples():
-                    rows.append(
-                        evidence_row(
-                            bp,
-                            readname,
-                            ask_barcode,
-                            getattr(barcode_row, "Barcode", None),
-                            getattr(barcode_row, "Filename", None),
-                        )
-                    )
+                    rows.append(evidence_row(bp, readname, ask_barcode, getattr(barcode_row, "Barcode", None),
+                            getattr(barcode_row, "Filename", None)))
 
     return pd.DataFrame(rows)
 
-
+#------------------------------------------------------------------------------#
 def evidence_row(bp: pd.Series, readname: object, ask_barcode: object, cell_barcode: object, read_filename: object) -> dict[str, object]:
     return {
         "CircleID": bp["CircleID"],
@@ -2340,12 +1923,12 @@ def evidence_row(bp: pd.Series, readname: object, ask_barcode: object, cell_barc
         "ReadFilename": read_filename,
     }
 
-
+#------------------------------------------------------------------------------#
 def normalize_gene_label(gene_text: object) -> str:
     genes = split_genes(gene_text)
     return "_".join(sorted(set(genes))) if genes else "ecDNA"
 
-
+#------------------------------------------------------------------------------#
 def make_barcode_id(row, sample_prefix: str | None = None) -> str:
     barcode = getattr(row, "Barcode", None)
     if pd.isna(barcode) or barcode is None:
@@ -2355,13 +1938,9 @@ def make_barcode_id(row, sample_prefix: str | None = None) -> str:
         return f"{sample_prefix}_{sample}_{barcode}"
     return str(barcode)
 
-
-def build_matrices(
-    evidence: pd.DataFrame,
-    min_reads: int = 1,
-    min_breakpoints: int = 1,
-    sample_prefix: str | None = None,
-    support_types: Iterable[str] = ("split_SA", "single_clip"),
+#------------------------------------------------------------------------------#
+def build_matrices(evidence: pd.DataFrame, min_reads: int = 1, min_breakpoints: int = 1,
+    sample_prefix: str | None = None, support_types: Iterable[str] = ("split_SA", "single_clip"),
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Return:
@@ -2386,42 +1965,30 @@ def build_matrices(
     df["GeneLabel"] = df["CancerGene"].map(normalize_gene_label)
 
     dedup = df.drop_duplicates(["CellID", "CircleID", "BreakpointID", "Readname"])
-    cell_breakpoint_matrix = (
-        dedup.groupby(["CellID", "BreakpointID"], sort=False)
-        .size()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
+    cell_breakpoint_matrix = (dedup.groupby(["CellID", "BreakpointID"], sort=False).size().unstack(fill_value=0)
+        .reset_index())
 
-    cell_circle_summary = (
-        dedup.groupby(["CellID", "CircleID", "GeneLabel"], sort=False)
-        .agg(
-            n_reads=("Readname", "nunique"),
-            n_breakpoints=("BreakpointID", "nunique"),
-            first_sample=("SampleID", "first"),
-            first_filename=("Filename", "first"),
-        )
-        .reset_index()
-    )
-    cell_circle_summary["is_ecDNA_positive"] = (
-        (cell_circle_summary["n_reads"] >= min_reads)
-        & (cell_circle_summary["n_breakpoints"] >= min_breakpoints)
-    )
+    cell_circle_summary = (dedup.groupby(["CellID", "CircleID", "GeneLabel"], sort=False).agg(
+            n_reads=("Readname", "nunique"), n_breakpoints=("BreakpointID", "nunique"),
+            first_sample=("SampleID", "first"), first_filename=("Filename", "first")).reset_index())
+    cell_circle_summary["is_ecDNA_positive"] = ((cell_circle_summary["n_reads"] >= min_reads)
+        & (cell_circle_summary["n_breakpoints"] >= min_breakpoints))
 
     positive = cell_circle_summary[cell_circle_summary["is_ecDNA_positive"]].copy()
     if positive.empty:
-        cell_annotation = pd.DataFrame({"CellID": sorted(df["CellID"].unique()), "ecDNA_status": "No"})
+        # FIX(20260717): keep the same columns as the has-positive branch (add the 3
+        #   count columns = 0); otherwise an all-negative sample yields a
+        #   cell_ecDNA_annotation missing 3 columns and downstream readers KeyError.
+        cell_annotation = pd.DataFrame({"CellID": sorted(df["CellID"].unique())})
+        cell_annotation["ecDNA_status"] = "No"
+        cell_annotation["n_ecDNA_circles"] = 0
+        cell_annotation["n_ecDNA_breakpoints"] = 0
+        cell_annotation["n_ecDNA_reads"] = 0
     else:
-        cell_annotation = (
-            positive.groupby("CellID", sort=False)
-            .agg(
+        cell_annotation = (positive.groupby("CellID", sort=False).agg(
                 ecDNA_status=("GeneLabel", lambda x: "_".join(sorted(set(x)))),
-                n_ecDNA_circles=("CircleID", "nunique"),
-                n_ecDNA_breakpoints=("n_breakpoints", "sum"),
-                n_ecDNA_reads=("n_reads", "sum"),
-            )
-            .reset_index()
-        )
+                n_ecDNA_circles=("CircleID", "nunique"), n_ecDNA_breakpoints=("n_breakpoints", "sum"),
+                n_ecDNA_reads=("n_reads", "sum")).reset_index())
         all_cells = pd.DataFrame({"CellID": sorted(df["CellID"].unique())})
         cell_annotation = all_cells.merge(cell_annotation, on="CellID", how="left")
         cell_annotation["ecDNA_status"] = cell_annotation["ecDNA_status"].fillna("No")
@@ -2430,20 +1997,19 @@ def build_matrices(
 
     return cell_breakpoint_matrix, cell_circle_summary, cell_annotation
 
-
+#------------------------------------------------------------------------------#
 def run_extract(args: argparse.Namespace) -> None:
     samples = [parse_sample_arg(value) for value in args.circular]
     circular = load_circular_tables(samples)
     if args.target_genes:
         target_genes = set(args.target_genes.split(","))
         keep = circular.groupby("CircleID")["CancerGene"].transform(
-            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value))
-        )
+            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value)))
         circular = circular[keep].copy()
     breakpoints = extract_breakpoint_pairs(circular)
     write_table(breakpoints, args.output)
 
-
+#------------------------------------------------------------------------------#
 def run_evidence(args: argparse.Namespace) -> None:
     breakpoints = read_table(args.breakpoints)
     bp_pair = read_table(args.bp_pair)
@@ -2451,22 +2017,18 @@ def run_evidence(args: argparse.Namespace) -> None:
     evidence = find_junction_evidence(breakpoints, bp_pair, read_barcodes)
     write_table(evidence, args.output)
 
-
+#------------------------------------------------------------------------------#
 def run_classify(args: argparse.Namespace) -> None:
     evidence = read_table(args.evidence)
-    matrix, summary, annotation = build_matrices(
-        evidence,
-        min_reads=args.min_reads,
-        min_breakpoints=args.min_breakpoints,
-        sample_prefix=args.sample_prefix,
-        support_types=args.support_types.split(",") if args.support_types else None,
-    )
+    matrix, summary, annotation = build_matrices(evidence, min_reads=args.min_reads,
+        min_breakpoints=args.min_breakpoints, sample_prefix=args.sample_prefix,
+        support_types=args.support_types.split(",") if args.support_types else None)
     outdir = Path(args.outdir)
     write_table(matrix, outdir / "cell_by_breakpoint_matrix.tsv")
     write_table(summary, outdir / "cell_circle_summary.tsv")
     write_table(annotation, outdir / "cell_ecDNA_annotation.tsv")
 
-
+#------------------------------------------------------------------------------#
 def run_all(args: argparse.Namespace) -> None:
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -2476,8 +2038,7 @@ def run_all(args: argparse.Namespace) -> None:
     if args.target_genes:
         target_genes = set(args.target_genes.split(","))
         keep = circular.groupby("CircleID")["CancerGene"].transform(
-            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value))
-        )
+            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value)))
         circular = circular[keep].copy()
 
     breakpoints = extract_breakpoint_pairs(circular)
@@ -2488,28 +2049,26 @@ def run_all(args: argparse.Namespace) -> None:
     evidence = find_junction_evidence(breakpoints, bp_pair, read_barcodes)
     write_table(evidence, outdir / "junction_read_evidence.tsv")
 
-    matrix, summary, annotation = build_matrices(
-        evidence,
-        min_reads=args.min_reads,
-        min_breakpoints=args.min_breakpoints,
-        sample_prefix=args.sample_prefix,
-    )
+    matrix, summary, annotation = build_matrices(evidence, min_reads=args.min_reads,
+        min_breakpoints=args.min_breakpoints, sample_prefix=args.sample_prefix)
     write_table(matrix, outdir / "cell_by_breakpoint_matrix.tsv")
     write_table(summary, outdir / "cell_circle_summary.tsv")
     write_table(annotation, outdir / "cell_ecDNA_annotation.tsv")
 
-
+#------------------------------------------------------------------------------#
 def run_bam_search(args: argparse.Namespace) -> None:
+    validate_single_cell_inputs(args)
     if pysam is None:
         raise ImportError("pysam is required for BAM-based ASK-search.")
+    prefix = args.outprefix or Path(args.outdir) / Path(args.bam).stem
+    args.fragments = prepare_fragments(args, args.bam, prefix)
 
     samples = [parse_sample_arg(value) for value in args.circular]
     circular = load_circular_tables(samples)
     if args.target_genes:
         target_genes = set(args.target_genes.split(","))
         keep = circular.groupby("CircleID")["CancerGene"].transform(
-            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value))
-        )
+            lambda values: any(gene in target_genes for value in values.dropna() for gene in split_genes(value)))
         circular = circular[keep].copy()
 
     breakpoints = extract_breakpoint_pairs(circular)
@@ -2519,48 +2078,23 @@ def run_bam_search(args: argparse.Namespace) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     ask_outputs = ask_style_output_paths(outdir, args.bam, args.outprefix)
     cleanup_legacy_bam_search_outputs(outdir)
-    genefile, sefile, cgfile = resolve_annotation_files(
-        genome=args.genome,
-        genefile=args.genefile,
-        sefile=args.sefile,
-        cgfile=args.cgfile,
-    )
+    genefile, sefile, cgfile = resolve_annotation_files(genome=args.genome, genefile=args.genefile, sefile=args.sefile,
+        cgfile=args.cgfile)
     write_table(circular, outdir / "known_ecDNA_segments.tsv")
     write_table(breakpoints, outdir / "known_ecDNA_breakpoint_pairs.tsv")
 
     target_chroms = target_chromosomes_from_circular(circular)
-    bp_all, clip_bg, bin_count, bp_duo_bam, reads_with_sa = target_process_alignment(
-        bam_path=args.bam,
-        breakpoints=breakpoints,
-        target_chroms=target_chroms,
-        circular_df=circular,
-        cn_background=args.cn_background,
-        window=args.window,
-        binsize=args.binsize,
-        mapq=args.mapq,
-        nmmax=args.nmmax,
-        ask_path=args.ask_path,
-    )
+    bp_all, clip_bg, bin_count, bp_duo_bam, reads_with_sa = target_process_alignment(bam_path=args.bam,
+        breakpoints=breakpoints, target_chroms=target_chroms, circular_df=circular, cn_background=args.cn_background,
+        window=args.window, binsize=args.binsize, mapq=args.mapq, nmmax=args.nmmax, ask_path=args.ask_path)
     write_table(bin_count, ask_outputs["output_bincnt"])
     clip_bg.to_csv(ask_outputs["output_clip"], sep="\t", index=False, header=False)
     write_pickle([bp_all, clip_bg, bin_count, bp_duo_bam, str(args.bam)], ask_outputs["output_pdat_1"])
 
-    cn_amp, cn_seg, bin_norm = target_detect_amplified_segment(
-        bin_count=bin_count,
-        bp_all=bp_all,
-        circular_df=circular,
-        binsize=args.binsize,
-        ask_path=args.ask_path,
-        min_cn=args.min_cn,
-        min_segsize_scale=args.min_segsize_scale,
-    )
-    cn_amp = annotate_amplicon_table(
-        cn_amp,
-        genefile=genefile,
-        sefile=None,
-        cgfile=cgfile,
-        ask_path=args.ask_path,
-    )
+    cn_amp, cn_seg, bin_norm = target_detect_amplified_segment(bin_count=bin_count, bp_all=bp_all,
+        circular_df=circular, binsize=args.binsize, ask_path=args.ask_path, min_cn=args.min_cn,
+        min_segsize_scale=args.min_segsize_scale)
+    cn_amp = annotate_amplicon_table(cn_amp, genefile=genefile, sefile=None, cgfile=cgfile, ask_path=args.ask_path)
     write_table(cn_amp, ask_outputs["output_cnamp"])
     write_table(cn_seg, ask_outputs["output_cnseg"])
     write_table(bin_norm, ask_outputs["output_binnorm"])
@@ -2568,69 +2102,32 @@ def run_bam_search(args: argparse.Namespace) -> None:
 
     known_seed = known_breakpoint_seed_table(breakpoints)
     write_table(known_seed, outdir / "known_breakpoint_seed.tsv")
-    bp_duo, bp_cand_stats, bp_duo_sa_near_known = target_detect_bp_pair(
-        bam_path=args.bam,
-        known_seed=known_seed,
-        bp_duo_bam=bp_duo_bam,
-        bp_all=bp_all,
-        cn_amp=cn_amp,
-        binsize=args.binsize,
-        window=args.window,
-        min_nt=args.min_nt,
-        mapq=args.mapq,
-        nmmax=args.nmmax,
-        ask_path=args.ask_path,
-        include_sa_candidates=not args.no_sa_candidates,
-    )
+    bp_duo, bp_cand_stats, bp_duo_sa_near_known = target_detect_bp_pair(bam_path=args.bam, known_seed=known_seed,
+        bp_duo_bam=bp_duo_bam, bp_all=bp_all, cn_amp=cn_amp, binsize=args.binsize, window=args.window,
+        min_nt=args.min_nt, mapq=args.mapq, nmmax=args.nmmax, ask_path=args.ask_path,
+        include_sa_candidates=not args.no_sa_candidates)
     write_table(bp_cand_stats, ask_outputs["output_bpcand"])
     write_table(bp_duo, ask_outputs["output_bpduo"])
     write_table(bp_duo, ask_outputs["output_align"])
-    _, jcs_summary = compute_jcs_tables(
-        breakpoints,
-        bp_duo,
-        window=args.window,
-        min_support_reads=args.jcs_min_support,
-        jcs_threshold=args.min_jcs,
-        max_norm_dist=args.jcs_max_norm_dist,
-    )
+    _, jcs_summary = compute_jcs_tables(breakpoints, bp_duo, window=args.window,
+        min_support_reads=args.jcs_min_support, jcs_threshold=args.min_jcs, max_norm_dist=args.jcs_max_norm_dist)
     write_table(jcs_summary, ask_outputs["output_jcs"])
     write_pickle([bp_duo, bp_cand_stats], ask_outputs["output_pdat_3"])
 
-    circ_anno, line_anno, bp_pair, seg, circ_score, bp_fine = target_construct_amplicon(
-        bp_duo=bp_duo,
-        bp_cand_stats=bp_cand_stats,
-        cn_amp=cn_amp,
-        bin_norm=bin_norm if not bin_norm.empty else bin_count,
-        known_single_segments=known_single_segment_circles(circular),
-        min_junc_cnt=args.min_junc_cnt,
-        bpp_min_dist=args.bpp_min_dist,
-        segment_restrict=args.segment_restrict,
-        subseg=not args.no_subseg,
-        rm_amp_df=args.rm_amp_df,
-        ask_path=args.ask_path,
-    )
-    circ_anno = annotate_amplicon_table(
-        circ_anno,
-        genefile=genefile,
-        sefile=sefile,
-        cgfile=cgfile,
-        ask_path=args.ask_path,
-    )
-    line_anno = annotate_amplicon_table(
-        line_anno,
-        genefile=genefile,
-        sefile=sefile,
-        cgfile=cgfile,
-        ask_path=args.ask_path,
-    )
+    circ_anno, line_anno, bp_pair, seg, circ_score, bp_fine = target_construct_amplicon(bp_duo=bp_duo,
+        bp_cand_stats=bp_cand_stats, cn_amp=cn_amp, bin_norm=bin_norm if not bin_norm.empty else bin_count,
+        known_single_segments=known_single_segment_circles(circular), min_junc_cnt=args.min_junc_cnt,
+        bpp_min_dist=args.bpp_min_dist, segment_restrict=args.segment_restrict, subseg=not args.no_subseg,
+        rm_amp_df=args.rm_amp_df, ask_path=args.ask_path)
+    circ_anno = annotate_amplicon_table(circ_anno, genefile=genefile, sefile=sefile, cgfile=cgfile,
+        ask_path=args.ask_path)
+    line_anno = annotate_amplicon_table(line_anno, genefile=genefile, sefile=sefile, cgfile=cgfile,
+        ask_path=args.ask_path)
     if not circ_anno.empty and not (bin_norm if not bin_norm.empty else bin_count).empty:
         try:
             ggraph = load_ask_modules(args.ask_path)["ggraph"]
-            circ_score = ggraph.add_stats_circ(
-                circ_anno,
-                bin_norm if not bin_norm.empty else bin_count,
-                binsize=args.binsize,
-            )
+            circ_score = ggraph.add_stats_circ(circ_anno, bin_norm if not bin_norm.empty else bin_count,
+                binsize=args.binsize)
         except Exception:
             pass
     bp_pair = clean_barcode_columns(bp_pair)
@@ -2639,38 +2136,42 @@ def run_bam_search(args: argparse.Namespace) -> None:
     write_table(circ_anno, ask_outputs["output_circ"])
     write_table(line_anno, ask_outputs["output_line"])
     write_table(circ_score, ask_outputs["output_circ_stat"])
-    write_sc_matrices_if_single_cell(
+    write_cell_assignments_if_single_cell(
         bp_pair,
         circ_anno,
         f"{Path(ask_outputs['output_bppair']).with_name(Path(ask_outputs['output_bppair']).name.replace('_ask_breakpoint_pair.tsv', '_ask_sc'))}",
         bam_path=args.bam,
+        raw_bp_pair=ask_outputs["output_bpduo"],
         mapq=args.mapq,
+        fragments_path=args.fragments,
+        cell_barcodes=(Path(args.sc_barcodes).read_text().splitlines()
+                       if args.sc_barcodes else None)
     )
-    write_junction_sequence_outputs(
-        bp_pair,
-        bam_path=args.bam,
-        output_align=ask_outputs["output_align"],
-        output_align_dir=ask_outputs["output_align_dir"],
-        ask_path=args.ask_path,
-        circ_anno=circ_anno,
-    )
-    plot_target_amplicons(
-        circ_anno,
-        line_anno,
-        cn_amp,
-        genefile=genefile,
-        sefile=sefile,
-        bin_norm=bin_norm if not bin_norm.empty else bin_count,
-        binsize=args.binsize,
-        fig_dir=ask_outputs["outfig"],
-        ask_path=args.ask_path,
-    )
+    write_junction_sequence_outputs(bp_pair, bam_path=args.bam, output_align=ask_outputs["output_align"],
+        output_align_dir=ask_outputs["output_align_dir"], ask_path=args.ask_path, circ_anno=circ_anno)
+    plot_target_amplicons(circ_anno, line_anno, cn_amp, genefile=genefile, sefile=sefile,
+        bin_norm=bin_norm if not bin_norm.empty else bin_count, binsize=args.binsize, fig_dir=ask_outputs["outfig"],
+        ask_path=args.ask_path)
     write_pickle([circ_anno, line_anno, bp_pair, seg], ask_outputs["output_pdat_4"])
     write_ask_stats(ask_outputs["output_stats"], cn_amp, bp_cand_stats, bp_duo, circ_anno, line_anno)
 
     cleanup_legacy_bam_search_outputs(outdir)
 
+#------------------------------------------------------------------------------#
+def validate_single_cell_inputs(args: argparse.Namespace) -> None:
+    """Validate explicit single-cell inputs before expensive BAM processing."""
+    if getattr(args, 'make_fragments', False) and args.fragments:
+        raise ValueError("Use either --fragments or --make-fragments, not both")
+    if args.fragments and not Path(args.fragments).is_file():
+        raise ValueError("--fragments file does not exist")
+    if args.sc_barcodes:
+        path = Path(args.sc_barcodes)
+        if not path.is_file():
+            raise ValueError("--sc-barcodes file does not exist")
+        if not any(line.strip() for line in path.read_text().splitlines()):
+            raise ValueError("--sc-barcodes must contain at least one barcode")
 
+#------------------------------------------------------------------------------#
 def add_bam_search_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--circular", action="append", required=True, help="sample_id[,filename]=known_ecDNA_structure.tsv")
     parser.add_argument("--bam", required=True, help="Query BAM indexed for random access.")
@@ -2681,12 +2182,8 @@ def add_bam_search_arguments(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument("--cgfile", default=None, help="Optional cancer gene census file.")
     parser.add_argument("--window", type=int, default=200)
     parser.add_argument("--binsize", type=int, default=10000)
-    parser.add_argument(
-        "--cn-background",
-        choices=["genome", "target"],
-        default="genome",
-        help="Background bins used for CN normalization. Use genome to match ASK-style plots.",
-    )
+    parser.add_argument("--cn-background", choices=["genome", "target"], default="genome",
+        help="Background bins used for CN normalization. Use genome to match ASK-style plots.")
     parser.add_argument("--mapq", type=int, default=20)
     parser.add_argument("--nmmax", type=int, default=1)
     parser.add_argument("--min-cn", type=float, default=None, help="CN cutoff for targeted amplified segment calling.")
@@ -2698,32 +2195,40 @@ def add_bam_search_arguments(parser: argparse.ArgumentParser) -> argparse.Argume
     parser.add_argument("--min-jcs", type=float, default=0.5, help="Circle-level Junction Concordance Score detection threshold.")
     parser.add_argument("--jcs-max-norm-dist", type=float, default=0.1, help="Maximum normalized Levenshtein distance for optional junction-sequence matching.")
     parser.add_argument("--barcode-tags", default="CB,CR,BX,BC")
+    parser.add_argument("--fragments", default=None,
+                        help="Required fragments BED/TSV[.gz], unless --make-fragments is requested.")
+    parser.add_argument("--sc-barcodes", default=None,
+                        help="Barcode list, one per line; omit to use bp_pair barcodes and return positives only.")
+    add_fragment_generation_arguments(parser)
     parser.add_argument("--ask-path", dest="ask_path", default=None, help="Path to ASK source directory containing getbppair.py.")
     parser.add_argument("--no-normal", action="store_true", help="Do not collect normal reads spanning breakpoint positions.")
     parser.add_argument("--no-sa-candidates", action="store_true", help="Use only known breakpoint seeds, not nearby SA-derived candidates.")
     parser.add_argument("--segment-restrict", action="store_true", help="Restrict ASK segment inference to clean breakpoints.")
     parser.add_argument("--no-subseg", action="store_true", help="Disable ASK subsegment inference inside CN amplicons.")
     parser.add_argument("--rm-amp-df", action="store_true", help="Remove amplicon boundary breakpoints after ASK subsegment inference.")
-    parser.add_argument("--min-reads", type=int, default=1)
-    parser.add_argument("--min-breakpoints", type=int, default=2)
-    parser.add_argument("--support-types", default="split_SA,single_clip")
-    parser.add_argument("--sample-prefix", default=None)
+    parser.add_argument("--min-reads", type=int, default=1, help="Legacy option; unused by the BAM/Q1 assignment workflow.")
+    parser.add_argument("--min-breakpoints", type=int, default=2, help="Legacy option; unused by the BAM/Q1 assignment workflow.")
+    parser.add_argument("--support-types", default="split_SA,single_clip", help="Legacy option; unused by the BAM/Q1 assignment workflow.")
+    parser.add_argument("--sample-prefix", default=None, help="Legacy option; unused by the BAM/Q1 assignment workflow.")
     parser.add_argument("-o", "--outdir", required=True)
     parser.add_argument("--outprefix", default=None, help="Optional ASK-style output prefix. Defaults to outdir/<bam-stem>.")
     parser.set_defaults(func=run_bam_search)
     return parser
 
-
+#------------------------------------------------------------------------------#
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="ASK-search: targeted search for known ecDNA breakpoint evidence directly from a query BAM."
-    )
+        description="ASK-search: targeted search for known ecDNA breakpoint evidence directly from a query BAM.")
     return add_bam_search_arguments(parser)
 
-
+#------------------------------------------------------------------------------#
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    try:
+        validate_single_cell_inputs(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.func(args)
 
 

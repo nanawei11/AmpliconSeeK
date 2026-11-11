@@ -43,21 +43,20 @@ def prepare_plot(amp_df, gbeds, bincnt, binsize = 10000, ext = 0.3,
     filtered_genes = list(filter(None, amp_df['Gene']))
     # print(filtered_genes)
 
-    # 2. 安全的分割和处理
+    # safely split and process gene names
     def safe_split(gene_str):
-        if isinstance(gene_str, str):  # 确保是字符串
+        if isinstance(gene_str, str):  # make sure the value is a string
             return gene_str.split('; ')
         return []
 
-    # 3. 修改后的代码
     try:
         genes = set()
         for g in filtered_genes:
-            if isinstance(g, str):  # 只处理字符串类型
+            if isinstance(g, str):  # process strings only
                 genes.update(safe_split(g))
         # print("Processed genes:", genes)
         
-        # 4. 处理beds
+        # filter gene beds
         beds = [g for g in gbeds if (g.name in genes)]
         
     except Exception as e:
@@ -616,14 +615,14 @@ class Arctrack:
             if isvirtual:
                 color='white'
             # plot arc
-            ax.add_patch(Arc((center, 1), width, height, 0, 0, 180,    # angle=0, theta1=0, theta2=180
+            ax.add_patch(Arc((center, 1), width, height, angle=0, theta1=0, theta2=180,    #
                               color = color, linewidth = linewidth))
 
             if not isvirtual:
                 # plot arc score
                 ax.text(center, height / 2, lk.score,    # x pos, y pos, show text
-                        horizontalalignment = 'center',  # 水平居中
-                        verticalalignment = 'bottom',    # 下面与y齐，相当于在线上面
+                        horizontalalignment = 'center',  # center horizontally
+                        verticalalignment = 'bottom',    # place above the line
                         fontsize = fontsize)
 
         # set the y-axis
@@ -756,8 +755,8 @@ class Genetrack:
             # ax.text((rg[1] + rg[2]) / 2, 1, rg[0])
         ax.xaxis.set_major_locator(ticker.FixedLocator(x_convert_major))
         ax.xaxis.set_major_formatter(ticker.FixedFormatter(x_actual_major))
-        ax.xaxis.set_minor_locator(ticker.FixedLocator(x_convert)) #  设置次要坐标点，起始点
-        ax.xaxis.set_minor_formatter(ticker.FixedFormatter(x_actual)) #  设置次要坐标点， 终止点
+        ax.xaxis.set_minor_locator(ticker.FixedLocator(x_convert)) # set minor tick positions
+        ax.xaxis.set_minor_formatter(ticker.FixedFormatter(x_actual)) # set minor tick labels
         plt.setp(ax.xaxis.get_minorticklabels(), rotation=90)
         ax.tick_params(axis='x', which='minor', pad=2) 
 

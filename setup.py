@@ -38,6 +38,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "numpy",
+        "memory-profiler",
         "pandas",
         "pysam",
         "matplotlib",
@@ -50,6 +51,7 @@ setup(
         "console_scripts": [
             "ask=ask.cli:ask_main",
             "ask-search=ask.cli:ecdna_search_main",
+            "ask-make-fragments=ask.sc_fragments:main",
         ],
     },
 )

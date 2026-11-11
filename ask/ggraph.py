@@ -12,6 +12,8 @@ import warnings
 
 warnings.filterwarnings('ignore')
 import misc
+import grange
+
 
 #------------------------------------------------------------------------------#
 # GGraph class: search for circular amplicons
@@ -55,6 +57,11 @@ class GGraph:
         Note: make visited and path have the same nodes
         """
 
+        # FIX(20260717): cap paths to avoid DFS combinatorial blow-up on dense graphs
+        # (real ecDNA cycle counts are far below this bound).
+        if len(allpath) >= 300000:
+            return allpath
+
         # mark current node as visited
         visited[v] = True
 
@@ -62,31 +69,32 @@ class GGraph:
         path.append(v)
 
         # loop for adjacent nodes of the current node
-        for v_adj in self.graph[v]:
-            if v_adj not in nodebefore:
-                # edge type is different from the last one
-                # one bp_pair edge and one segment edge
-                if (parent == -1 \
-                    or self.edges[(parent, v)][0] != self.edges[(v, v_adj)][0]):
-                    if (visited[v_adj] == False): # recur if the node is not visited
-                        self.dfs_search_circle(v_adj, visited, v, path, allpath, nodebefore)
-                    # cycle detected if the adjacent node is visited
-                    # and is not the parent of current node
-                    elif (parent != -1 and parent != v_adj): #and v_adj in path
-                        path.append(v_adj) # add v_adj, it's the loop start
-                        # store when loop detected
-                        allpath.append(tuple(path)) # must use tuple! or can't run
-                        path.pop() # remove v_adj from path
-                        # file3 = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_1020/ask3_both_knn3_mr10_GBM39_1020_nofilter_circ/all_path.txt'
-                        # with open(file3,'a') as f:
-                        #     f.write(f'circ\t{tuple(path)}\n')
-                else:
-                    if (len(self.graph[v]) == 1): # end of a path, linear amplicon
-                        # store when to the branch end
-                        allpath.append(tuple(path)) # must use tuple! or can't run
-                        # file3 = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_1020/ask3_both_knn3_mr10_GBM39_1020_nofilter_circ/all_path.txt'
-                        # with open(file3,'a') as f:
-                        #     f.write(f'linear\t{tuple(path)}\n')
+        if len(path) <= 2 * 100:
+            for v_adj in self.graph[v]:
+                if v_adj not in nodebefore:
+                    # edge type is different from the last one
+                    # one bp_pair edge and one segment edge
+                    if (parent == -1 \
+                        or self.edges[(parent, v)][0] != self.edges[(v, v_adj)][0]):
+                        if (visited[v_adj] == False): # recur if the node is not visited
+                            self.dfs_search_circle(v_adj, visited, v, path, allpath, nodebefore)
+                        # cycle detected if the adjacent node is visited
+                        # and is not the parent of current node
+                        elif (parent != -1 and parent != v_adj): #and v_adj in path
+                            path.append(v_adj) # add v_adj, it's the loop start
+                            # store when loop detected
+                            allpath.append(tuple(path)) # must use tuple! or can't run
+                            path.pop() # remove v_adj from path
+                            # file3 = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_1020/ask3_both_knn3_mr10_GBM39_1020_nofilter_circ/all_path.txt'
+                            # with open(file3,'a') as f:
+                            #     f.write(f'circ\t{tuple(path)}\n')
+                    else:
+                        if (len(self.graph[v]) == 1): # end of a path, linear amplicon
+                            # store when to the branch end
+                            allpath.append(tuple(path)) # must use tuple! or can't run
+                            # file3 = '/cluster/home/WeiNa/project/ecDNA/result/ChIP-seq-ask2/ask3_1020/ask3_both_knn3_mr10_GBM39_1020_nofilter_circ/all_path.txt'
+                            # with open(file3,'a') as f:
+                            #     f.write(f'linear\t{tuple(path)}\n')
 
         # remove current edge from path and mark it as unvisited
         path.pop()
@@ -107,6 +115,11 @@ class GGraph:
         allpath = []
         node = sorted(self.get_nodes())
 
+        # FIX(20260717): empty breakpoint graph (low signal/depth) makes max(node)
+        # raise ValueError; return empty paths -> "no ecDNA" instead of crashing.
+        if not node:
+            return allpath
+
         # mark all nodes as not vsisited
         visited = [False]*(max(node) + 1)
 
@@ -115,6 +128,9 @@ class GGraph:
         # detect circle in different subgraph
         # say until all nodes are visisted
         for i in node:
+            # FIX(20260717): stop the outer loop once the path cap is hit.
+            if len(allpath) >= 300000:
+                return allpath
             if visited[i] == False:
                 self.dfs_search_circle(i, visited, -1, path, allpath, nodebefore)
             nodebefore.append(i)
@@ -138,9 +154,14 @@ class GGraph:
             circ = [row for row in circ if (row[-1] not in row[:-1])]
 
         # keep ones both start and end with inner
+        def _is_inner(key):
+            e = self.edges.get(tuple(key))
+            return bool(e) and e[0] == 'inner'
+
         circ = [row for row in circ \
-            if (self.edges[row[:2]][0] == 'inner' and \
-                self.edges[row[-2:]][0] == 'inner')]
+            if (len(row) >= 2 and \
+                _is_inner(row[:2]) and _is_inner(row[-2:]))]
+
 
         if (type == 'circular'):
             # rotate path to smallest in the first
@@ -160,8 +181,8 @@ class GGraph:
         """
         get the longest path
 
-        if multiple longest path,
-        choose the one with max edge weight
+        if multiple longest paths, prefer paths without chrUn_, then choose
+        the one with max edge weight
 
         if multiple max edge weight,
         choose the first one
@@ -193,28 +214,36 @@ class GGraph:
             circ_ref = []
             for i in set(cc):
                 paths = [circ[ind] for ind, v in enumerate(cc) if v == i]
-                # get the first one with max edge weight
                 oop = []
-                cand_ind = []
-                for ind, row in enumerate(paths):
-                    if check_chrom:
-                        # find the all path is from same chrom 
-                        chr = set([self.vertex[v][0] for v in row])
-                        if len(chr) == 1:
-                            cand_ind.append(ind)
-                    op = []
+                has_chrun = []
+                same_chrom = []
+
+                for row in paths:
+                    chroms = {str(self.vertex[v][0]) for v in row}
+                    has_chrun.append(any(chrom.startswith('chrUn_') for chrom in chroms))
+                    same_chrom.append(len(chroms) == 1)
+                    outer_weight = 0
                     for v in zip(row, row[1:] + row[:last_idx]):
                         if (self.edges[v][0] == 'outer'):
-                            op.append(self.edges[v][1]) 
-                    oop.append(np.sum(op))
-                cand_ind.append(np.argmax(oop))
-                circ_ref += [paths[t] for t in set(cand_ind)]
+                            outer_weight += self.edges[v][1]
+                    oop.append(outer_weight)
+
+                cand_ind = []
+                if check_chrom:
+                    clean_same_chrom = [ind for ind in range(len(paths)) if same_chrom[ind] and not has_chrun[ind]]
+                    chrun_same_chrom = [ind for ind in range(len(paths)) if same_chrom[ind] and has_chrun[ind]]
+                    cand_ind.extend(clean_same_chrom if clean_same_chrom else chrun_same_chrom)
+
+                # CHRUN: any primary-contig path outranks a chrUn_ path; support breaks ties.
+                best_ind = min(range(len(paths)), key=lambda ind: (has_chrun[ind], -oop[ind], ind))
+                cand_ind.append(best_ind)
+                circ_ref += [paths[ind] for ind in dict.fromkeys(cand_ind)]
             # print(circ_ref)
         
         return circ_ref
 
     #--------------------------------------------------------------------------#
-    def get_representitive_path(self, circ, type = 'circular', first_filter = False, second_filter = False, third_filter = False):
+    def get_representitive_path(self, circ, type = 'circular'):
         """
         get representitive non-overlapping paths
         """
@@ -242,9 +271,15 @@ class GGraph:
                     tf.append(tf_)
                 print(len(tf), sum(tf))
                 # tf = [len(set(longest).intersection(row))/len(row) >= 0.4 for row in paths]
+                # FIX(20260718): The old break condition was always true because
+                # paths was replaced by the retained paths before comparing
+                # sum(tf) with len(paths). The loop therefore stopped at t=0 and
+                # retained only single-chromosome circles. Compare with the old
+                # length so the loop stops only when no path is removed.
+                n_before = len(paths)
                 paths = [i for (i, v) in zip(paths, tf) if v]
                 t += 1
-                if sum(tf) == len(paths):
+                if sum(tf) == n_before:
                     break
 
         else:
@@ -341,7 +376,9 @@ class GGraph:
                 w = ('outer', row[7])
                 self.add_edge(a, b, w)
 
-        for row in seg.itertuples():
+        # Segment metadata (e.g. _type) may precede CN. Select the graph
+        # fields explicitly so metadata cannot become an inner-edge weight.
+        for row in seg[['Chrom', 'Start', 'End', 'CN']].itertuples():
             if (row[1], row[2], 'L') in self.node_dict and \
                 (row[1], row[3], 'R') in self.node_dict:
                 a = self.node_dict[(row[1], row[2], 'L')]
@@ -414,6 +451,70 @@ class GGraph:
                 op.append(self.dfs_connected(v, visited, visited_list))
         return op
 
+
+
+def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
+    """Search circular amplicons with DFS and return annotated representatives."""
+    gg = GGraph()
+    gg.build_ggraph_from_bp(bp_pair, bp_fine, seg)
+
+    second_find = False
+    if len(gg.graph) > 400 and bp_pair.shape[0] > 400:
+        print(f'seg.shape: {seg.shape}, bp_pair.shape{bp_pair.shape}')
+        for node, neighbors in gg.graph.items():
+            if len(neighbors) >= 4:
+                count_neigh = [-gg.vertex[neighbor][4] for neighbor in neighbors]
+                gg.graph[node] = [neighbors[index] for index in np.argsort(count_neigh)[:4]]
+        second_find = True
+
+    all_circ_path = gg.get_all_path_contain_circle()
+    circ_uniq = gg.path_unique(all_circ_path)
+
+    print('get representitive circles in the ggraph')
+    circ = gg.get_representitive_path(circ_uniq)
+    circ_df = gg.make_amplicon_df(circ)
+
+    index = circ_df['AmpliconID'].unique().shape[0]
+    col_sel = ['Chrom', 'Start', 'End', 'Strand', 'SplitCount', 'CN']
+    single_circ = pd.DataFrame(gg.single_segment_loop, columns=col_sel)
+    single_circ['AmpliconID'] = 'circ'
+    unique_single_circ = pd.concat([circ_df[~circ_df.duplicated(subset='AmpliconID', keep=False)], single_circ], axis=0).drop_duplicates(col_sel)
+    circ_df = pd.concat([circ_df, unique_single_circ[unique_single_circ['AmpliconID'] == 'circ']], axis=0)
+    adj_index = circ_df['AmpliconID'] == 'circ'
+    circ_df.loc[adj_index, 'AmpliconID'] = ['circ_' + str(i) for i in range(index, index + sum(adj_index))]
+
+    # Annotate
+    annotation_keys = ['Chrom', 'Start', 'End']
+    annotation_cols = []
+    segment_anno = circ_df[annotation_keys].drop_duplicates().reset_index(drop=True)
+    if genefile is not None:
+        segment_anno = grange.GRange.map_gene(segment_anno, genefile)
+        annotation_cols.append('Gene')
+        if cgfile is not None:
+            segment_anno = misc.map_cancergene(segment_anno, cgfile)
+            annotation_cols.append('CancerGene')
+    if sefile is not None:
+        segment_anno = grange.GRange.map_senchancer(segment_anno, sefile)
+        annotation_cols.append('SE')
+
+    if annotation_cols:
+        circ_anno = circ_df.assign(_row_order=np.arange(len(circ_df))).merge(
+            segment_anno[annotation_keys + annotation_cols],
+            on=annotation_keys, how='left', sort=False, validate='many_to_one')
+        circ_anno = circ_anno.sort_values('_row_order').drop(
+            columns='_row_order').reset_index(drop=True)
+    else:
+        circ_anno = circ_df
+    # if genefile is not None:
+    #     circ_anno = circ_df.assign(Gene=grange.GRange.map_gene(circ_df, genefile)['Gene'])
+    #     if cgfile is not None:
+    #         circ_anno = misc.map_cancergene(circ_anno, cgfile)
+    # else:
+    #     circ_anno = circ_df
+
+    # if sefile is not None:
+    #     circ_anno = grange.GRange.map_senchancer(circ_anno, sefile)
+    return gg, all_circ_path, circ_anno, second_find
 
 
 def stat_by_seg(circ_anno, bin_norm, binsize):
@@ -673,3 +774,116 @@ def add_stats_circ(circ_anno, bin_norm, binsize=10000):
                  'FCleft_sum', 'FCright_sum', 'invCNCV_sum', 'invCNCV_mean', 'invSplitCV', 
                  'Gene_num', 'Cancergene_num', 'SE_num', 'FCleft_mean_1', 'FCright_mean_1', 'Score']
     return result[rearrange]
+
+
+
+def deduplicate_ask_circles(circ_anno, circ_score, overlap=0.95,
+                            endpoint_tolerance=None, strict_overlap=True):
+    """Return (representative_segments, representative_scores, mapping).
+
+    Accept ASK pandas DataFrames, without modifying them or doing file I/O.
+    Default: same chromosome set and reciprocal overlap >0.95; highest Score
+    wins (ties: lexical AmpliconID). Every derivative must match its own
+    representative, so chains of overlaps cannot bridge dissimilar calls.
+    Coordinates use the historical benchmark's inclusive interval convention.
+    Use overlap=0.90, endpoint_tolerance=20, strict_overlap=False for its
+    original strict-endpoint rule. Segment order/strand are not compared.
+
+    Derivatives are recoverable from the original tables using mapping.role.
+    Call after all circular calls have been scored and before final output.
+    """
+    import math
+    import pandas as pd
+
+    if not math.isfinite(overlap) or not 0 <= overlap <= 1:
+        raise ValueError('overlap must be finite and between 0 and 1')
+    if endpoint_tolerance is not None and (
+        not math.isfinite(endpoint_tolerance) or endpoint_tolerance < 0
+    ):
+        raise ValueError('endpoint_tolerance must be nonnegative or None')
+    fields = ['AmpliconID', 'Score', 'cluster_id', 'representative',
+              'representative_score', 'role', 'reciprocal_overlap_candidate',
+              'reciprocal_overlap_representative', 'max_merged_endpoint_delta_bp']
+    if circ_anno.empty and circ_score.empty:
+        return circ_anno.copy(), circ_score.copy(), pd.DataFrame(columns=fields)
+    for table, required in ((circ_anno, {'AmpliconID', 'Chrom', 'Start', 'End'}),
+                            (circ_score, {'AmpliconID', 'Score'})):
+        if not required.issubset(table.columns):
+            raise ValueError('missing columns: ' + str(required - set(table.columns)))
+        if table['AmpliconID'].isna().any():
+            raise ValueError('AmpliconID cannot be missing')
+    if circ_score['AmpliconID'].duplicated().any():
+        raise ValueError('circ_score must have exactly one row per AmpliconID')
+    if set(circ_anno.AmpliconID) != set(circ_score.AmpliconID):
+        raise ValueError('segment and score AmpliconIDs must match')
+
+    intervals = {}
+    for call_id, group in circ_anno.groupby('AmpliconID', sort=False):
+        by_chrom = {}
+        for chrom, start, end in group[['Chrom', 'Start', 'End']].itertuples(index=False, name=None):
+            if pd.isna(chrom):
+                raise ValueError('Chrom cannot be missing')
+            start, end = float(start), float(end)
+            if not all(math.isfinite(x) and x.is_integer() for x in (start, end)):
+                raise ValueError('coordinates must be finite integers')
+            start, end = sorted((int(start), int(end)))
+            by_chrom.setdefault(chrom, []).append((start, end))
+        for chrom, spans in by_chrom.items():
+            merged = []
+            for start, end in sorted(spans):
+                if not merged or start > merged[-1][1] + 1:
+                    merged.append([start, end])
+                else:
+                    merged[-1][1] = max(merged[-1][1], end)
+            by_chrom[chrom] = merged
+        intervals[call_id] = by_chrom
+
+    def similarity(a, b):
+        if set(a) != set(b):
+            return 0.0, 0.0, math.inf
+        intersection = 0
+        delta = 0
+        for chrom in a:
+            left, right = a[chrom], b[chrom]
+            if len(left) != len(right):
+                delta = math.inf
+            else:
+                for x, y in zip(left, right):
+                    delta = max(delta, abs(x[0]-y[0]), abs(x[1]-y[1]))
+            i = j = 0
+            while i < len(left) and j < len(right):
+                intersection += max(0, min(left[i][1], right[j][1]) -
+                                    max(left[i][0], right[j][0]) + 1)
+                if left[i][1] < right[j][1]:
+                    i += 1
+                else:
+                    j += 1
+        length_a = sum(e-s+1 for spans in a.values() for s, e in spans)
+        length_b = sum(e-s+1 for spans in b.values() for s, e in spans)
+        return intersection/length_a, intersection/length_b, delta
+
+    ranked = [(call_id, float(score)) for call_id, score in
+              circ_score[['AmpliconID', 'Score']].itertuples(index=False, name=None)]
+    if not all(math.isfinite(score) for _, score in ranked):
+        raise ValueError('Score must be finite')
+    ranked.sort(key=lambda item: (-item[1], str(item[0])))
+    representatives, mapping = [], []
+    for call_id, score in ranked:
+        for number, (rep_id, rep_score) in enumerate(representatives, 1):
+            left, right, delta = similarity(intervals[call_id], intervals[rep_id])
+            passes = min(left, right) > overlap if strict_overlap else min(left, right) >= overlap
+            if (set(intervals[call_id]) == set(intervals[rep_id]) and passes and
+                    (endpoint_tolerance is None or delta <= endpoint_tolerance)):
+                break
+        else:
+            representatives.append((call_id, score))
+            number = len(representatives)
+            rep_id, rep_score = call_id, score
+            left, right, delta = 1.0, 1.0, 0.0
+        mapping.append(dict(zip(fields, [call_id, score, f'cluster_{number}',
+            rep_id, rep_score, 'representative' if call_id == rep_id else 'derived',
+            left, right, delta])))
+    keep = {call_id for call_id, _ in representatives}
+    return (circ_anno.loc[circ_anno.AmpliconID.isin(keep)].copy(),
+            circ_score.loc[circ_score.AmpliconID.isin(keep)].copy(),
+            pd.DataFrame(mapping, columns=fields))

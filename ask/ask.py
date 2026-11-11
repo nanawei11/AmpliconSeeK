@@ -10,6 +10,7 @@ import pysam
 import cndetect
 import bpdetect
 import bpjoint
+import evidence
 import bppair
 import ggraph
 import grange
@@ -55,7 +56,6 @@ def process_alignment(bamfile, gsfile = None, binsize = 10000,
     """
     filename = os.path.splitext(os.path.basename(bamfile))
     logg.info(f'process_alignment: {filename}')
-        
     ## get bamfile
     bamfile_ = pysam.AlignmentFile(bamfile, 'r')
     bamfile_init = covbam.prebamfile(bamfile_, downsample = downsample)
@@ -75,14 +75,18 @@ def process_alignment(bamfile, gsfile = None, binsize = 10000,
         else:
             bamfile_init.median_coverage(window_size = 10000)
             with open(save_stat, 'w') as f:
-                f.write(f'{bamfile_init.downsample_ratio}\t') 
+                f.write(f'{bamfile_init.downsample_ratio}\t')
                 for i in bamfile_init.basic_stats:
                     f.write(f'{i}\t')
         bamfile_init.downsample_ratio = min(0.4, bamfile_init.downsample_ratio)
     # extract all clip reads
-    bp_all, reads_with_SA = covbam.clip_from_bam(bamfile_init, mapq = mapq, nmmax = nmmax, \
-                                                 SA_with_nm = SA_with_nm) # ******change
-
+    if mode == 'standard':
+        bp_all, reads_with_SA, bin_count = covbam.clip_from_bam(
+            bamfile_init, mapq=mapq, nmmax=nmmax,
+            SA_with_nm=SA_with_nm, count_binsize=binsize)
+    else:
+        bp_all, reads_with_SA = covbam.clip_from_bam(
+            bamfile_init, mapq=mapq, nmmax=nmmax, SA_with_nm=SA_with_nm)
     if bamfile_init.downsample_ratio != 1:
         ds_bamfile_pathname = covbam.downsampled_bam_path(
             bamfile_init, bamfile_init.downsample_ratio)
@@ -91,26 +95,22 @@ def process_alignment(bamfile, gsfile = None, binsize = 10000,
     clip_bg = covbam.clip2bedgraph(bp_all)
 
     # get read counts in genomic bins
-    if (mode == 'standard'):
-        bin_count = covbam.region_count(bamfile_init, gsfile,
-            binsize = binsize, mapq = mapq, nmmax = nmmax)
-    else:
+    if mode != 'standard':
         bin_count = covbam.region_count_2pass(bamfile_init, gsfile,
             binsize = binsize, mapq = mapq, nmmax = nmmax,
             sub_binsize = sub_binsize, q = seg_robost_quant)
     print(f'possible bp_pair more than {len(reads_with_SA)}')
     if len(reads_with_SA) > 0:
-        bp_duo_bam =  getbppair.get_bp_pair(reads_with_SA)
+        sa_bp_pairs =  getbppair.get_bp_pair(reads_with_SA)
     else:
-        bp_duo_bam = pd.DataFrame()
+        sa_bp_pairs = pd.DataFrame()
 
     if bamfile_init.downsample_ratio != 1:
-        bamfile = ds_bamfile_pathname 
-
+        bamfile = ds_bamfile_pathname
 
     logg.info(f'process_alignment finished')
     ## return
-    return bp_all, clip_bg, bin_count, bp_duo_bam, bamfile
+    return bp_all, clip_bg, bin_count, sa_bp_pairs, bamfile
 
 
 #------------------------------------------------------------------------------#
@@ -119,7 +119,7 @@ def detect_amplified_segment(bin_count, bp_all, blfile = None, genefile = None,
                              binsize = 10000,
                              min_cn = None, std_scale = 8,
                              min_segsize_scale = 5,
-                             min_nt = 5):
+                             min_nt = 5, bamfile = None):
     """detect amplified segments and breakpoint list
 
     Parameters
@@ -198,19 +198,23 @@ def detect_amplified_segment(bin_count, bp_all, blfile = None, genefile = None,
 #     return table_df
 
 #-----------------------------------------------------------------------------#
-def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
+def detect_bp_pair(bamfile, sa_bp_pairs, bp_all, cn_amp,
                    blfile = None, bp_min_clip = 10,
                    binsize = 10000, max_n_bp = 500, clean_bp_perc = 0.2,
                    only_keep_clean_bp = True, min_nt = 5,
-                   mapq = 1, nmmax = 3, bp_pair_info_file = None, 
-                   num_chrom = None, num_stratify = None, way = 'both',
-                   multi_process = False, num_cores = 8):
+                   mapq = 1, nmmax = 3,
+                   num_chrom = None, num_stratify = None, no_sa = False,
+                   multi_process = True, num_cores = 8,
+                   pe_window = 150, bin_count=None, bin_norm=None):
     """ from breakpoint list to breakpoint pairs
 
     Parameters
     ----------
     bamfile : input bam file with index in the same folder
         better bwa mem aligned, coordinate sorted and duplicates marked
+    sa_bp_pairs : SA-derived breakpoint-pair candidates from process_alignment
+    no_sa : disable SA candidates and SA-guided discordant-edge snapping
+        Clip-site pairing and PE/DS evidence remain enabled.
     bp_all : all breakpoints in a dict
         dict{'left' = pd_df, 'right' = pd_df}
     cn_amp : amplified segments in pd_df
@@ -238,64 +242,101 @@ def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
     # bamfile_ = pysam.AlignmentFile(bamfile, 'r')
     # bamfile_init = covbam.prebamfile(bamfile_, downsample=15)
     # bamfile_init.downsample_ratio = downsample_ratio
-        
-    if way == 'ask2' or way == 'both':
+    print(f'cn_amp:{cn_amp}')
+
+    def estimate_insert_stats(bam, n_sample=1000, seed=0):
+        """
+        Estimate read length, insert size, and insert-size standard deviation from proper pairs
+        """
+        rng = np.random.default_rng(seed)
+        lengths, inserts = [], []
+        for a in bam.fetch(until_eof=True):
+            if a.is_unmapped:
+                continue
+            lengths.append(a.infer_query_length(always=False) or 0)
+            if a.is_proper_pair and not a.is_reverse and 0 < a.template_length < 10000:
+                inserts.append(a.template_length)
+            if len(inserts) >= n_sample:
+                break
+        read_length = float(np.mean([l for l in lengths if l])) if lengths else 100.0
+        insert_size = float(np.mean(inserts)) if inserts else 300.0
+        insert_std = float(np.std(inserts)) if inserts else 50.0
+        max_insert = insert_size + 3 * insert_std
+        return read_length, insert_size, insert_std, max_insert
+
+
+    regions = []
+    for chrom, start, end in cn_amp.iloc[:, :3].itertuples(index=False,name=None):
+        start = max(0, int(start) - 10 * 10000)
+        end = int(end) + 10 * 10000
+        regions.append( (str(chrom), start, end) )
+
+    with pysam.AlignmentFile(bamfile, "rb") as bam:
+        read_length, _, _, max_insert = estimate_insert_stats(bam, n_sample = 5000)
+        edges = covbam.cluster_discordant_edges_multi(bam, regions = regions, max_insert = max_insert, read_length = read_length,
+                                                      pair_support = max(2, bp_min_clip))
+        # Large WGS amplicons can produce tens of thousands of PE edges.  Log
+        # the count instead of serializing the full list (diagnostic only).
+        print(f'discordant edge count: {len(edges)}')
+
+    if not no_sa:
+        edges, _ = cndetect.snap_discordant_edges_to_bp_duo(edges, sa_bp_pairs)
+
+    cn_amp, edges = cndetect.refine_boundary_with_discordant( cn_amp, edges, bin_count, binsize = 3*10000,
+                                                             min_edge_support = max(2, bp_min_clip), partner_anchor_window =  10000)
+    ##----------------------------
+    if not no_sa:
         # get bp pairs from bp_cand_stats
-        if not bp_duo_bam.empty:                
-            print(f'get the number of bppair from bamfile  {bp_duo_bam.shape}')
+        if not sa_bp_pairs.empty:
+            print(f'get the number of bppair from bamfile  {sa_bp_pairs.shape}')
             # filter breakpoints in blacklist regions
             if (blfile is not None):
-                bp_duo_bam = bpdetect.bp_filter_by_blacklist(bp_duo_bam, blfile)
-            print(f'get the number of bppair after filter_by_blacklist {bp_duo_bam.shape}')
+                sa_bp_pairs = bpdetect.bp_filter_by_blacklist(sa_bp_pairs, blfile)
+            print(f'get the number of bppair after filter_by_blacklist {sa_bp_pairs.shape}')
 
             # oxnly include the breakpoints in amplified segments
-            bp_duo_bam = bpdetect.bp_filter_by_amplicon(bp_duo_bam, cn_amp, binsize)
-            print(f'get the number of bppair after filter_by_amplicon {bp_duo_bam.shape}')
+            sa_bp_pairs = bpdetect.bp_filter_by_amplicon(sa_bp_pairs, cn_amp, binsize)
+            print(f'get the number of bppair after filter_by_amplicon {sa_bp_pairs.shape}')
 
             # filter when the bp pair is very large
-            if bp_duo_bam.shape[0] >= 20000:
-                bp_duo_bam = bp_duo_bam[bp_duo_bam["Count"] > 1]
-            bp_cand_bam =  bpdetect.refine_bp_cand_bam(bp_duo_bam, bp_all)  # bp_duo_bam[bp_duo_bam["Count"] > 1]
+            if sa_bp_pairs.shape[0] >= 20000:
+                sa_bp_pairs = sa_bp_pairs[sa_bp_pairs["Count"] > 1]
+            bp_cand_bam =  bpdetect.refine_bp_cand_bam(sa_bp_pairs, bp_all)  # sa_bp_pairs[sa_bp_pairs["Count"] > 1]
         else:
             bp_cand_bam = pd.DataFrame()
     else:
-        bp_duo_bam, bp_cand_bam = pd.DataFrame(), pd.DataFrame()   
+        sa_bp_pairs, bp_cand_bam = pd.DataFrame(), pd.DataFrame()
 
-    if way == 'both' or way == 'ask':
-        # get the breakpoint candidates >= "n" read counts
-        bp_cand = bpdetect.bp_filter_by_n(bp_all, n = bp_min_clip)
-        print(f'bp_cand after filter breakpoints  >= "n" read counts: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
+    # get the breakpoint candidates >= "n" read counts
+    bp_cand = bpdetect.bp_filter_by_n(bp_all, n = bp_min_clip, edges=edges, pe_window = pe_window)
+    print(f'bp_cand after filter breakpoints  >= "n" read counts: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
 
-        # filter breakpoints in blacklist regions
-        if (blfile is not None):
-            bp_cand = bpdetect.bp_filter_by_blacklist(bp_cand, blfile, isdf = False)
-        print(f'bp_cand after filter breakpoints in blacklist regions: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
+    # filter breakpoints in blacklist regions
+    if (blfile is not None):
+        bp_cand = bpdetect.bp_filter_by_blacklist(bp_cand, blfile, isdf = False)
+    print(f'bp_cand after filter breakpoints in blacklist regions: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
 
-        # only include the breakpoints in amplified segments
-        bp_cand = bpdetect.bp_filter_by_amplicon(bp_cand, cn_amp, binsize, isdf = False)
-        print(f'bp_cand after filter breakpoints in amplified segments: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
-    
-        # in this case, only the top N breakpoints will be analyzed
-        bp_cand_df = bpdetect.bp_top_n(bp_cand, topn = max_n_bp, num_chrom = num_chrom, num_stratify = num_stratify)
-        print(f'bp_cand_df.shape: {bp_cand_df.shape}')
+    # only include the breakpoints in amplified segments
+    bp_cand = bpdetect.bp_filter_by_amplicon(bp_cand, cn_amp, binsize, isdf = False)
+    print(f'bp_cand after filter breakpoints in amplified segments: left {bp_cand["left"].shape},  right {bp_cand["right"].shape}')
 
-        # put bp candidates into one table  ----------------------(consuming time )
-        bp_cand_all = bpdetect.bp_seq_depth(bp_cand_df, \
-                                            bamfile, perc = clean_bp_perc, mapq = mapq, nmmax = nmmax, isdf = False)
-        # remove noise
-        if (only_keep_clean_bp):
-            bp_cand_stats = bp_cand_all[bp_cand_all['CleanBP'] == True]
-        else:
-            bp_cand_stats = bp_cand_all
+    # in this case, only the top N breakpoints will be analyzed
+    bp_cand_df = bpdetect.bp_top_n(bp_cand, topn = max_n_bp, num_chrom = num_chrom, num_stratify = num_stratify)
+    print(f'bp_cand_df.shape: {bp_cand_df.shape}')
 
-        # print(f'bp_duo_bam.shape: {bp_duo_bam.shape}')
-        # bp_duo_bam.to_csv('bp_duo_bam_' + way +'.csv')
+    # put bp candidates into one table  ----------------------(consuming time )
+    bp_cand_all = bpdetect.bp_seq_depth(bp_cand_df, \
+                                        bamfile, perc = clean_bp_perc, mapq = mapq, nmmax = nmmax, isdf = False)
+    # remove noise
+    if (only_keep_clean_bp):
+        bp_cand_stats = bp_cand_all[bp_cand_all['CleanBP'] == True]
     else:
-        bp_cand_stats = pd.DataFrame()
+        bp_cand_stats = bp_cand_all
+
 
     print(f'get bp pairs')
     # get bp pairs
-    bp_duo = bpjoint.get_bppair(bamfile, bp_cand_stats, bp_duo_bam, min_nt = min_nt,
+    bp_duo = bpjoint.get_bppair(bamfile, bp_cand_stats, sa_bp_pairs, min_nt = min_nt,
                                 multi_process = multi_process, num_cores = num_cores)  # consuming time
 
     print(f'bp_duo.shape: {bp_duo.shape}')
@@ -304,96 +345,41 @@ def detect_bp_pair(bamfile, bp_duo_bam, bp_all, cn_amp,
     try:
         bp_cand_stats.drop(columns = 'Group', inplace=True)
     except:
-        print(f'bp_cand_stats no Group column or empty')  
+        print(f'bp_cand_stats no Group column or empty')
 
     if not bp_cand_bam.empty:
         bp_cand_stats = pd.concat([bp_cand_stats, bp_cand_bam]).drop_duplicates(['Chrom', 'Coord', 'Clip'], keep='first')
-        
     # get bp pairs from paired reads
     bp_cn = bpjoint.bp_cn_boundary(cn_amp)
-    bp_duo_pe = bpjoint.get_bppair_peread(bamfile, bp_cn)
-
-    # merge bp pairs
-    bp_duo = pd.concat([bp_duo_pe, bp_duo])
-    logg.info(f'detect_bp_pair finished')
-    return bp_duo, bp_cand_stats
-
-
-#------------------------------------------------------------------------------#
-def output_bppair_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
-    """output breakpoint pair alignments
-    """
-    if ( not circ_anno.empty ):
-        # bamfile_ = pysam.AlignmentFile(bamfile, 'r')
-        # bamfile_init = covbam.prebamfile(bamfile_)
-        # bamfile_init.downsample_ratio = downsample_ratio
-        bpjoint.ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno)
-
-# @profile
-def find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile):
-    '''
-    search circ based DFS.
-    '''
-    # create a new ggraph
-    gg = ggraph.GGraph()
+    bp_duo_pe = bpjoint.get_bppair_peread(bamfile, bp_cn, min_reads = 2)
     
-    # build ggraph from breakpoints
-    gg.build_ggraph_from_bp(bp_pair, bp_fine, seg) 
+    edges_df = evidence.edges_to_bp_pair_df(edges)
+    # Keep split/bp_duo junction metadata when another evidence source reports
+    # the same pair. If no bp_duo exists, prefer PE over DS; all support is merged.
+    bp_duo = evidence.merge_bp_pair_evidence(bp_duo, bp_duo_pe, edges_df)
+    print(f'merged DS/PE/split breakpoint pairs: {bp_duo.shape}')
 
-    # keep thr top 4 neighbors with the number count
-    second_find = False
-    if len(gg.graph) > 400 and bp_pair.shape[0] > 400:
-        print(f'seg.shape: {seg.shape}, bp_pair.shape{bp_pair.shape}')
-        for i, v in gg.graph.items():
-            if len(v) >= 4:
-                count_neigh = [-gg.vertex[i][4] for i in v]
-                gg.graph[i] = [v[i] for i in np.argsort(count_neigh)[:4]]
-        second_find = True
-
-    # get all circles in the ggraph
-    all_circ_path = gg.get_all_path_contain_circle() 
-    #--------------------------------------------------------------------------#
-    # remove redundant
-    circ_uniq = gg.path_unique(all_circ_path)
-
-    print(f'get representitive circles in the ggraph')
-    # choose a representitive circle from each circle cluster
-    circ = gg.get_representitive_path(circ_uniq)
-
-    # make interpretable circular amplicon
-    circ_df = gg.make_amplicon_df(circ)
-
-    # add single circular amplicon
-    index = circ_df['AmpliconID'].unique().shape[0]
-    col_sel = ['Chrom', 'Start', 'End', 'Strand', 'SplitCount', 'CN']
-    single_circ = pd.DataFrame(gg.single_segment_loop, columns=col_sel)
-    single_circ['AmpliconID'] = 'circ'
-    unique_single_circ = pd.concat([circ_df[~circ_df.duplicated(subset='AmpliconID', keep=False)], single_circ],axis=0).drop_duplicates(col_sel)
-    circ_df = pd.concat([circ_df, unique_single_circ[unique_single_circ['AmpliconID'] == 'circ']], axis=0)
-    adj_index = circ_df['AmpliconID'] == 'circ'
-    circ_df['AmpliconID'].loc[adj_index] = ['circ_' + str(i) for i in range(index, index + sum(adj_index))]
-
-    # annotate circular amplicon
-    if (genefile is not None):
-        circ_anno = circ_df.assign(
-            Gene = grange.GRange.map_gene(circ_df, genefile)['Gene'])
-        if (cgfile is not None):
-            circ_anno = misc.map_cancergene(circ_anno, cgfile)
+    # Snap one unsupported DS endpoint to a nearby clip-supported CN boundary.
+    if bin_norm is not None:
+        bp_duo = evidence.snap_ds_to_cn_boundary(
+            bp_duo, bp_cand_stats, cn_amp, bin_norm, bp_all,
+            min_cn=4.5, min_reads=2, min_boundary_clip=5,
+            max_snap_distance=30000, max_cn_gap=30000,
+            min_continuous_cn_frac=1.0)
     else:
-        circ_anno = circ_df
-    
-    if (sefile is not None):
-        circ_anno = grange.GRange.map_senchancer(circ_anno, sefile)
-    return gg, all_circ_path, circ_anno, second_find
+        print('DS-to-CN boundary snapping skipped: bin_norm is unavailable')
 
-#------------------------------------------------------------------------------#
+    logg.info(f'detect_bp_pair finished')
+    return bp_duo, bp_cand_stats,cn_amp
+
 # @profile
 def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm, 
                        genefile = None, sefile = None, cgfile = None, 
-                       min_junc_cnt = 10, bpp_min_dist = 200,
+                       min_junc_cnt = 10, force_juncread = False, bpp_min_dist = 200,
                        segment_restrict = True, subseg = True, rm_amp_df = False,
-                       first_filter = False, second_filter = False, third_filter = False, knn = 3,
-                       saveseg = None, savebp_bp_pair = None, EGA = None):  
+                       knn = 3, saveseg = None, savebp_bp_pair = None, EGA = None,
+                       min_cn = 5, min_circ_score = 4.0,
+                       precomputed_seg = None):
     """construct amplicon structure
 
     Parameters
@@ -405,8 +391,10 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
     cgfile : cancer gene file with first column gene symbol
     min_junc_cnt : minimal supporting read counts of breakpoint pairs
     bpp_min_dist : remove breakpoint pairs with distance <= N
-    segment_restrict : True - remove non CleanBP
-        False - use non CleanBP as alternative segment stop
+    segment_restrict : True - remove non CleanBP; False - use non CleanBP as alternative segment stop
+    min_circ_score : float, default 4.0
+        Keep circular amplicons with Score >= this threshold. Set to
+        ``-inf`` to disable the final score filter.
     """
     logg.info(f'construct_amplicon ...')
     #--------------------------------------------------------------------------#
@@ -424,42 +412,68 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
         return circ_anno, line_anno, bp_duo, cn_amp, circ_score
 
     #--------------------------------------------------------------------------#
-    cn_amp = cn_amp[['Chrom', 'Start', 'End', 'CN', 'ClipLeft', 'ClipRight', 'Gene', 'CancerGene']]
+    required_col = [ 'Chrom', 'Start', 'End', 'CN', 'ClipLeft', 'ClipRight', 'Gene', 'CancerGene']
+    optional_col = ['DiscLeft', 'DiscRight', 'PartnerLeft', 'PartnerRight', 'SegSource']
+    cn_amp = cn_amp[ required_col + [x for x in optional_col if x in cn_amp.columns] ]
 
     print(f'filter bp duo: bp_duo.shape {bp_duo.shape}')
 
     # estimate the thred for bp_pair
-    if bp_duo.shape[0] >= 500:
-        _, min_junc_cnt, _, _ = bppair.estimaed_thred(bp_duo)
+    # force_juncread: use the caller-supplied min_junc_cnt (--juncread) as-is,
+    #   bypassing the auto-estimated / hardcoded threshold below.
+    if force_juncread:
+        print(f'force_juncread: use min_junc_cnt = {min_junc_cnt} (skip estimaed_thred)')
+        aa = bppair.estimaed_thred(bp_duo[bp_duo['Seq'] !='DS'])
+        print(f'Estimated threshold: {aa}')
+    elif bp_duo.shape[0] >= 500:
+        _, min_junc_cnt, _, _ = bppair.estimaed_thred(bp_duo[bp_duo['Seq'] !='DS'])
     else:
-        min_junc_cnt = 5 
-
-    # min_junc_cnt = min(min_junc_cnt,5)  # CellineDrug
+        min_junc_cnt = 2
     
-    # remove breakpoint pairs in a short distance or have few split reads
-    bp_pair = bppair.bp_pair_filter(bp_duo, bpp_min_dist, min_junc_cnt)
-    print(f'filter bp_pair by thred: {min_junc_cnt}: bp_pair.shape {bp_pair.shape}')
-    # if subseg and bpp_max_dist:
+    if EGA:
+        # keep = bp_duo['Count'] > min_junc_cnt
+        # if 'Seq' in bp_duo.columns:
+        #     keep &= bp_duo['Seq'].ne('DS')
+        # print(f'EGA breakpoint filter only: Count > {min_junc_cnt}, exclude Seq == DS')
+        # bp_pair = bp_duo[keep].copy()
+        # if 'ClipDepth' in bp_cand_stats.columns:
+        #     bp_cand_stats = bp_cand_stats[
+        #         bp_cand_stats['ClipDepth'] >= min_junc_cnt].copy()
+        #     print(f'EGA breakpoint candidates: ClipDepth >= {min_junc_cnt}')
+        # bp_pair = bppair.bp_pair_filter(bp_duo, cn_amp, bp_cand_stats, 0, min_junc_cnt,
+        #                                max_srp=1)
+        bp_pair = bppair.bp_pair_filter(bp_duo, cn_amp, bp_cand_stats, bpp_min_dist, min_junc_cnt)
+    else:
+        bp_pair = bppair.bp_pair_filter(bp_duo, cn_amp, bp_cand_stats, bpp_min_dist, min_junc_cnt)
+    # bp_pair = bppair.snap_pe_to_segment_boundary(bp_pair, cn_amp, tolerance=20)
+
+    logg.info(f'filter bp_pair by thred: {min_junc_cnt}: bp_pair.shape {bp_pair.shape}')    # if subseg and bpp_max_dist:
     #     print(f'only subseg is {subseg} == True')
     #     ind = (bp_pair['Chrom1']==bp_pair['Chrom2']) & (np.abs(bp_pair['Coord2'] - bp_pair['Coord1']) > bpp_max_dist)
     #     bp_pair = bp_pair[~ind]
 
     # breakpoint stats table
-    print(f'bp_refine: bp_pair.shape {bp_pair.shape}')
+    logg.info(f'bp_refine: bp_pair.shape {bp_pair.shape}')
     bp_fine, cn_amp_merged = bppair.bp_refine(bp_pair, bp_cand_stats, cn_amp)
-
-    seg = bppair.get_segment(bp_fine, bp_pair, cn_amp_merged, 
-                             restrict = segment_restrict, subseg = subseg, rm_amp_df = rm_amp_df, knn = knn) # ******change 
-    # add cn to segments
-    seg = bppair.add_cn(seg, cn_amp, bin_norm)
-    # if saveseg:
-    #     seg.to_csv(saveseg, sep='\t', index=False)
-    # if savebp_bp_pair:
-    #     bp_pair.to_csv(savebp_bp_pair, sep='\t', index=False)
+    if precomputed_seg is not None:
+        seg = precomputed_seg[['Chrom', 'Start', 'End', 'CN']].copy()
+        logg.info(f'use precomputed breakpoint segments: {seg.shape}')
+    else:
+        seg = bppair.get_segment(bp_fine, bp_pair, cn_amp_merged,
+                                 restrict=segment_restrict, subseg=subseg,
+                                 rm_amp_df=rm_amp_df, knn=knn)
+        seg = bppair.add_cn(seg.copy(), cn_amp, bin_norm)
+        # if not EGA:
+        seg = bppair.filter_seg_by_interior_cn(seg, bin_norm, min_cn=min_cn, min_amp_frac=0.5)
+    if saveseg:
+        seg.to_csv(saveseg, sep='\t', index=False)
+    if savebp_bp_pair:
+        bp_pair.to_csv(savebp_bp_pair, sep='\t', index=False)
 
     #--------------------------------------------------------------------------#
     print(f'get all circles in the ggraph')
-    gg, all_circ_path, circ_anno, second_find = find_circ(bp_pair, bp_fine, seg, genefile, cgfile, sefile)
+    gg, all_circ_path, circ_anno, second_find = ggraph.find_circ(
+        bp_pair, bp_fine, seg, genefile, cgfile, sefile)
 
     # compute fretures of  circs and  take the better circs based on scores
     if not circ_anno.empty:
@@ -482,7 +496,8 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
             bp_pair1 = bp_pair[(bp_pair['Chrom1'].isin(select_chrom)) & (bp_pair['Chrom2'].isin(select_chrom))]
             seg1 = seg[seg['Chrom'].isin(select_chrom)]
             bp_fine1 = bp_fine[bp_fine['Chrom'].isin(select_chrom)]
-            _, _, circ_anno1, _ = find_circ(bp_pair1, bp_fine1, seg1, genefile, cgfile, sefile)
+            _, _, circ_anno1, _ = ggraph.find_circ(
+                bp_pair1, bp_fine1, seg1, genefile, cgfile, sefile)
             
             # merge the circ of two search
             query_circ_circ = np.unique(circ_anno['AmpliconID'])
@@ -519,7 +534,50 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
     else:
         circ_score = pd.DataFrame()
 
+    # Apply one circle-level score filter to both the segment table and its
+    # summary table before any downstream output, matrix generation, plotting,
+    # or serialization. This prevents a low-score AmpliconID from surviving in
+    # one representation but not the other. The boundary is inclusive:
+    # Score == min_circ_score is retained.
+    if not circ_score.empty:
+        score = pd.to_numeric(circ_score['Score'], errors='coerce')
+        keep_ids = set(circ_score.loc[score >= min_circ_score, 'AmpliconID'])
+        n_before = circ_score['AmpliconID'].nunique()
+        circ_score = circ_score[circ_score['AmpliconID'].isin(keep_ids)].copy()
+        circ_anno = circ_anno[circ_anno['AmpliconID'].isin(keep_ids)].copy()
+        n_after = len(keep_ids)
+        print(
+            f'filter circular amplicons by Score >= {min_circ_score:g}: '
+            f'{n_before} -> {n_after} (removed {n_before - n_after})'
+        )
+
     #--------------------------------------------------------------------------#
+    # Cluster scored circles before downstream output, plotting and matrices.
+    # Keep the five-value return interface; audit records also survive pickle.
+    all_circ_anno, all_circ_score = circ_anno, circ_score
+    circ_anno, circ_score, circle_map = ggraph.deduplicate_ask_circles(
+        all_circ_anno, all_circ_score, overlap=0.95,
+        endpoint_tolerance=None, strict_overlap=True,
+    )
+    derived_ids = set(circle_map.loc[circle_map['role'] == 'derived', 'AmpliconID'])
+    circ_anno.attrs['circle_dedup'] = {
+        'overlap': 0.95, 'strict_overlap': True,
+        'endpoint_tolerance': None,
+        'map_columns': list(circle_map.columns),
+        'map_records': circle_map.to_dict('records'),
+        'segment_columns': list(all_circ_anno.columns),
+        'derived_segments': all_circ_anno.loc[
+            all_circ_anno['AmpliconID'].isin(derived_ids)
+        ].to_dict('records') if derived_ids else [],
+        'score_columns': list(all_circ_score.columns),
+        'derived_scores': all_circ_score.loc[
+            all_circ_score['AmpliconID'].isin(derived_ids)
+        ].to_dict('records') if derived_ids else [],
+    }
+    print(f'cluster circular amplicons (reciprocal overlap >0.95): '
+          f'{len(circle_map)} -> {len(circ_score)} representatives; '
+          f'{len(derived_ids)} derivatives')
+
     # remove redundant
     line_uniq = gg.path_unique(all_circ_path, type = 'linear')
     print(f'get representitive line in the ggraph')
@@ -537,11 +595,11 @@ def construct_amplicon(bp_duo, bp_cand_stats, cn_amp, bin_norm,
             line_anno = misc.map_cancergene(line_anno, cgfile)
     else:
         line_anno = line_df
-    
     if (sefile is not None):
         line_anno = grange.GRange.map_senchancer(line_anno, sefile)
 
     logg.info(f'construct_amplicon finished')
+
     return circ_anno, line_anno, bp_pair, seg, circ_score
 
 #------------------------------------------------------------------------------#
@@ -792,8 +850,7 @@ if __name__ == '__main__':
         max_n_bp = max_n_breakpoint,
         clean_bp_perc = cleanbp_cutoff,
         only_keep_clean_bp = only_keep_cleanbp, 
-        bp_pair_info_file = output_align,
-        way = 'ask')
+        no_sa = True)
 
     # output results
     bp_duo.to_csv(output_bpduo, sep='\t', index=False)

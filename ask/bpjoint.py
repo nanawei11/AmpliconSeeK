@@ -13,7 +13,7 @@ from itertools import combinations
 from multiprocessing.pool import ThreadPool as Pool
 from functools import partial
 #------------------------------------------------------------------------------#
-from covbam import check_read
+from covbam import check_read, encode_read_evidence
 import misc
 import logger
 
@@ -24,6 +24,25 @@ def get_read_barcode(read, tags=("CB", "CR", "BX", "BC")):
         if read.has_tag(tag):
             return read.get_tag(tag)
     return None
+
+#------------------------------------------------------------------------------#
+def add_compact_read_ids(bp_pair_df):
+    """Replace QNAME strings with stable uint64 arrays before WGS tables are retained."""
+    if bp_pair_df.empty:
+        bp_pair_df = bp_pair_df.copy()
+        bp_pair_df['ReadID'] = pd.Series(index=bp_pair_df.index, dtype=object)
+        return bp_pair_df.drop(columns=['Readname'], errors='ignore')
+
+    encoded = [
+        encode_read_evidence(readnames, readbarcodes)
+        for readnames, readbarcodes in zip(bp_pair_df['Readname'], bp_pair_df['Readbarcode'])
+    ]
+    bp_pair_df = bp_pair_df.copy()
+    bp_pair_df['ReadID'] = [item[0] for item in encoded]
+    bp_pair_df['Readbarcode'] = [item[1] for item in encoded]
+
+    # Keep the original alignment-occurrence count; ReadID may contain repeats.
+    return bp_pair_df.drop(columns=['Readname'], errors='ignore')
 
 #------------------------------------------------------------------------------#
 def check_read_clip(read, clip_type = 'soft_left', seq = False):
@@ -420,7 +439,7 @@ def get_breakpoint_duo(bamfile, bp_cand_df, \
         op = []
 
         for i, j in bpp_cand_list:
-            mtf, offset, ab = breakpoint_matcher(bpass[i], bpass[i], \
+            mtf, offset, ab = breakpoint_matcher(bpass[i], bpass[j], \
                 i[2] + j[2], seq_len, seed_len, min_nt)
             if (mtf):
                 op.append(i + j + (mtf, offset, ab)) 
@@ -535,6 +554,49 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
     bp_duo: data frame of all bp pairs
     dist: merge only the distance of two ends less than dist
     '''
+    def as_list(value):
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            return as_list(value.item())
+        if isinstance(value, (list, tuple, set, np.ndarray)):
+            return list(value)
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return []
+        return [value]
+
+    def merge_read_support(primary, secondary):
+        primary = primary.copy()
+        merged_read_ids = []
+        merged_readbarcodes = []
+
+        for source in (primary, secondary):
+            if 'ReadID' in source.index:
+                read_ids = np.asarray(as_list(source.get('ReadID', [])), dtype=np.uint64)
+                readbarcodes = as_list(source.get('Readbarcode', []))
+            else:
+                # READID: accept legacy rows until all cached breakpoint tables are regenerated.
+                read_ids, readbarcodes = encode_read_evidence(
+                    as_list(source.get('Readname', [])),
+                    as_list(source.get('Readbarcode', [])),
+                )
+
+            for index, read_id in enumerate(read_ids):
+                merged_read_ids.append(read_id)
+                barcode = readbarcodes[index] if index < len(readbarcodes) else None
+                barcode = str(barcode) if barcode is not None and str(barcode) not in {'', 'None', 'nan'} else None
+                merged_readbarcodes.append(barcode)
+
+        # Keep every read occurrence when nearby breakpoint rows are merged.
+        read_ids = np.asarray(merged_read_ids, dtype=np.uint64)
+        readbarcodes = merged_readbarcodes
+        if not any(barcode is not None for barcode in readbarcodes):
+            readbarcodes = []
+
+        primary['ReadID'] = read_ids
+        # BARCODE: keep WGS rows sparse after nearby-breakpoint merging.
+        primary['Readbarcode'] = readbarcodes
+        primary['Count'] = int(primary['Count']) + int(secondary['Count'])
+        return primary
+
     bp_duo_new = []
     if col == 1:
         groupby = ['Chrom1','Coord1', 'Clip1']
@@ -563,11 +625,12 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
                         
                     if distance <= dist or (distance <= dist1 and dist1 != dist):
                         t += 1
-                        # keep the row with largest count 
-                        if prev_row['Count'] >= row['Count']:   
+                        # Keep the stronger coordinates and concatenate evidence.
+                        if prev_row['Count'] >= row['Count']:
+                            prev_row = merge_read_support(prev_row, row)
                             dist1 = dist + distance
                         else:
-                            prev_row = row
+                            prev_row = merge_read_support(row, prev_row)
                             dist1 = dist
                     else:
                         final_result.append(prev_row)
@@ -578,12 +641,20 @@ def remove_duplicates(bp_duo, dist = 100, col = 1):
         else:
             bp_duo_new.append(i[1])
 
-    return pd.concat(bp_duo_new)
+    result = pd.concat(bp_duo_new)
+    # pandas Series assignment may squeeze a one-element array to 0-d.
+    # Restore the vector invariant before the second duplicate-removal pass.
+    if "ReadID" in result.columns:
+        result["ReadID"] = result["ReadID"].map(
+            lambda value: np.asarray(as_list(value), dtype=np.uint64))
+    if "Readbarcode" in result.columns:
+        result["Readbarcode"] = result["Readbarcode"].map(as_list)
+    return result
 
 
 
 #------------------------------------------------------------------------------#
-def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
+def get_bppair(bamfile, bp_cand_df, sa_bp_pairs,\
     seq_len = 50, seed_len = 5, min_nt = 5,
     match_method = 'fuzzy_match', multi_process = False, num_cores = 8):
     """
@@ -608,28 +679,28 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
         barcodes = []
         for barcode in as_list(value):
             if barcode is None or (isinstance(barcode, float) and np.isnan(barcode)):
+                barcodes.append(None)
                 continue
             barcode = str(barcode).strip()
-            if barcode and barcode not in {'None', 'nan'}:
-                barcodes.append(barcode)
+            barcodes.append(barcode if barcode and barcode not in {'None', 'nan'} else None)
         return barcodes
 
-    if not bp_duo_bam.empty and 'Readsbarcode' not in bp_duo_bam.columns:
-        bp_duo_bam = bp_duo_bam.copy()
-        if 'Readsname' in bp_duo_bam.columns:
-            bp_duo_bam['Readsbarcode'] = [
-                [None] * len(as_list(readnames)) for readnames in bp_duo_bam['Readsname']
+    if not sa_bp_pairs.empty and 'Readsbarcode' not in sa_bp_pairs.columns:
+        sa_bp_pairs = sa_bp_pairs.copy()
+        if 'Readsname' in sa_bp_pairs.columns:
+            sa_bp_pairs['Readsbarcode'] = [
+                [None] * len(as_list(readnames)) for readnames in sa_bp_pairs['Readsname']
             ]
         else:
-            bp_duo_bam['Readsbarcode'] = [[] for _ in range(bp_duo_bam.shape[0])]
+            sa_bp_pairs['Readsbarcode'] = [[] for _ in range(sa_bp_pairs.shape[0])]
 
-    if bp_duo_bam.shape[0] > 10000:
+    if sa_bp_pairs.shape[0] > 10000:
         multi_process = True
         num_cores = 20
 
-    if not bp_duo_bam.empty:
-        rm_bpp = bp_duo_bam.index.tolist()  #  c
-        # rm_bpp = [(i[1:4],i[4:7]) for i in bp_duo_bam.itertuples()]
+    if not sa_bp_pairs.empty:
+        rm_bpp = sa_bp_pairs.index.tolist()  #  c
+        # rm_bpp = [(i[1:4],i[4:7]) for i in sa_bp_pairs.itertuples()]
     else:
         rm_bpp = []
         
@@ -682,21 +753,29 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
                 sum_count = bp_count[0][1] + bp_count[1][1]
                 if sum_count < row.Count:  # raw count bp_pair
                     sum_count = row.Count
+                # Keep SA seeds and extra clip matches for downstream ReadID counting.
+                read_support = {}
+                for names, barcodes in [(rm_clipped_name, rm_clipped_barcode)] + [read_names_and_barcodes(match) for match in bp_count]:
+                    for index, name in enumerate(names):
+                        barcode = barcodes[index] if index < len(barcodes) else None
+                        barcode = clean_barcode_list([barcode])[0]
+                        if name not in read_support or read_support[name] is None:
+                            read_support[name] = barcode
                 tmp = [
                     row.Chrom1, row.Coord1, row.Clip1,
                     row.Chrom2, row.Coord2, row.Clip2,
                     sum_count, row.offset, row.Seq,
-                    rm_clipped_name, rm_clipped_barcode,
+                    list(read_support), list(read_support.values()),
                 ]
                 t1.append(tmp)   
             return t1
     
     if multi_process:
         t1 = []
-        if not bp_duo_bam.empty:
+        if not sa_bp_pairs.empty:
             pool = Pool(num_cores)
             func = partial(run_join_breakpoint, bamfile, match_method, 2, t1)
-            pool.map(func, bp_duo_bam.itertuples())  # [bp_duo_bam['Count']>1]
+            pool.map(func, sa_bp_pairs.itertuples())  # [sa_bp_pairs['Count']>1]
         if bpduo:
             pool = Pool(num_cores)
             func2 = partial(run_join_breakpoint, bamfile, match_method, 1, t1)
@@ -709,11 +788,11 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
                 logg.info(f'bpduo: {tmp} of {len(bpduo)}')
                 t1 = run_join_breakpoint(bamfile, match_method, type = 1, t1 = t1, row = row)
                 tmp += 1
-        if not bp_duo_bam.empty:
+        if not sa_bp_pairs.empty:
             tmp = 0
-            for row in bp_duo_bam[bp_duo_bam['Count'] >= 1].itertuples():  # >2 改为1
-            # for row in bp_duo_bam_1[bp_duo_bam_1['Count'] >= 1].itertuples():  # >2 改为1
-                logg.info(f'bpduobam: {tmp} of {bp_duo_bam.shape[0]}')
+            for row in sa_bp_pairs[sa_bp_pairs['Count'] >= 1].itertuples():  # changed from >2 to >=1
+            # for row in sa_bp_pairs_1[sa_bp_pairs_1['Count'] >= 1].itertuples():  # changed from >2 to >=1
+                logg.info(f'bpduobam: {tmp} of {sa_bp_pairs.shape[0]}')
                 t1 = run_join_breakpoint(bamfile, match_method, type = 2, t1 = t1, row = row)
                 tmp += 1
 
@@ -724,10 +803,12 @@ def get_bppair(bamfile, bp_cand_df, bp_duo_bam,\
     
     if 'Readbarcode' in bp_pair_df.columns:
         bp_pair_df['Readbarcode'] = bp_pair_df['Readbarcode'].map(clean_barcode_list)
+
+    # READID: discard long split-read QNAME strings before duplicate refinement.
+    bp_pair_df = add_compact_read_ids(bp_pair_df)
     if bp_pair_df.shape[0] > 1:
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 1)
         bp_pair_df = remove_duplicates(bp_pair_df, dist = 2, col = 2)
-    bp_pair_df = bp_pair_df.drop(columns=['Readname'], errors='ignore')
     return bp_pair_df.sort_values(
         'Count', ascending = False).reset_index(drop=True)
 
@@ -817,6 +898,12 @@ def get_alignment(bamfile, a, b, offset = 0):
     return [a_seq[0]] + [b_seq[0]] + [] + a_seq[1:] + b_seq[1:]
 
 #------------------------------------------------------------------------------#
+def output_bppair_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
+    """Write breakpoint-pair alignments for non-empty circular amplicons."""
+    if not circ_anno.empty:
+        ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno)
+
+
 def ouput_alignment(bp_pair, bamfile, output_align_dir, circ_anno):
     """output alignment on pairs of breakpoints
     """
@@ -884,18 +971,22 @@ def get_bppair_peread(bamfile, bp_cand_df, \
     """
 
     # get the improper paired reads for each breakend
+
     bplist = []
     for row in bp_cand_df.itertuples():
         if (row[3] == 'L'):
             a = [row[1], row[2], row[2] + seq_len]
         elif (row[3] == 'R'):
             a = [row[1], row[2] - seq_len, row[2]]
+        a_read = []
+        a_bc = {}
         with pysam.AlignmentFile(bamfile, "rb") as bamf:
-            a_read = [
-                read.query_name for read in bamf.fetch(a[0], a[1], a[2])
-                if (check_read(read) and (read.is_proper_pair == False))]
+            for read in bamf.fetch(a[0], a[1], a[2]):
+                if (check_read(read) and (read.is_proper_pair == False)):
+                    a_read.append(read.query_name)
+                    a_bc[read.query_name] = get_read_barcode(read)
         if (len(a_read) >= min_reads):
-            bplist.append([row[1], row[2], row[3], a_read])
+            bplist.append([row[1], row[2], row[3], a_read, a_bc])
 
     # search pairs
     op = []
@@ -903,19 +994,26 @@ def get_bppair_peread(bamfile, bp_cand_df, \
         if (bplist[i][0] == bplist[j][0] and
             abs(bplist[i][1] - bplist[j][1]) < seq_len):
             isc = 0
+            readname = []
         else:
             readname = misc.intersect(bplist[i][3], bplist[j][3])
             isc = len(readname)
 
         if (isc >= min_reads):
-            op.append(bplist[i][0:3] + bplist[j][0:3] + [isc, 0, 'PE_Support', readname, [None] * len(readname)])
+            # CHANGE
+            barcodes = [bplist[i][4].get(rn, bplist[j][4].get(rn)) for rn in readname]
+            op.append(bplist[i][0:3] + bplist[j][0:3] + [isc, 0, 'PE_Support', readname, barcodes])
     colnames = ["Chrom1", "Coord1", "Clip1",
                 "Chrom2", "Coord2", "Clip2", 'Count', 'offset', 'Seq', 'Readname', 'Readbarcode']
     bp_pair_df = pd.DataFrame(op, columns = colnames)
+    # CHANGE
     if 'Readbarcode' in bp_pair_df.columns:
-        bp_pair_df['Readbarcode'] = [[] for _ in range(bp_pair_df.shape[0])]
-    bp_pair_df = bp_pair_df.drop(columns=['Readname'], errors='ignore')
+        bp_pair_df['Readbarcode'] = bp_pair_df['Readbarcode'].map(
+            lambda bcs: [str(b) if b is not None and str(b) not in {'', 'None', 'nan'} else None for b in bcs]
+            if isinstance(bcs, list) else [])
 
+    # READID: PE evidence uses the same stable IDs as discordant and split evidence.
+    bp_pair_df = add_compact_read_ids(bp_pair_df)
     return bp_pair_df.sort_values(
         'Count', ascending=False).reset_index(drop=True)
 

@@ -10,11 +10,44 @@ import logging
 import os
 import time
 import random
+import hashlib
+import zlib
 from collections import defaultdict
 
 #------------------------------------------------------------------------------#
 from grange import GRange
 import misc
+
+#------------------------------------------------------------------------------#
+def qname_to_read_id(qname):
+    """Return a stable uint64 identifier without retaining the QNAME string."""
+    # READID: unlike Python hash(), BLAKE2b is stable across jobs and pdat resumes.
+    digest = hashlib.blake2b(str(qname).encode('utf-8'), digest_size=8, person=b'ASKREAD').digest()
+    return np.uint64(int.from_bytes(digest, byteorder='little', signed=False))
+
+#------------------------------------------------------------------------------#
+def encode_read_evidence(readnames, readbarcodes=None):
+    """Encode QNAME occurrences as compact uint64 IDs with aligned barcodes."""
+    readnames = list(readnames) if isinstance(readnames, (list, tuple, set, np.ndarray, pd.Series)) else []
+    readbarcodes = list(readbarcodes) if isinstance(readbarcodes, (list, tuple, np.ndarray, pd.Series)) else []
+    read_ids = []
+    barcodes = []
+
+    for index, readname in enumerate(readnames):
+        if readname is None or str(readname) in {'', 'None', 'nan'}:
+            continue
+        read_ids.append(qname_to_read_id(readname))
+        barcode = readbarcodes[index] if index < len(readbarcodes) else None
+        barcode = str(barcode) if barcode is not None and str(barcode) not in {'', 'None', 'nan'} else None
+        barcodes.append(barcode)
+
+    read_ids = np.asarray(read_ids, dtype=np.uint64)
+
+    # BARCODE: WGS has no cell barcode; keep one empty list instead of N None slots.
+    if not any(barcode is not None for barcode in barcodes):
+        barcodes = []
+
+    return read_ids, barcodes
 
 #------------------------------------------------------------------------------#
 def _alignment_filename(alignment_file):
@@ -90,7 +123,24 @@ def get_reads_with_SA(read, reads_with_SA, nmmax=1,  SA_with_nm = True):
 #------------------------------------------------------------------------------#
 # get all clip depth
 #------------------------------------------------------------------------------#
-def clip_from_bam(bamfile, mapq = 20, nmmax = 1, n = 0,  SA_with_nm = True):
+def _count_map_to_df(counts, key_columns, min_count=0, sort_by_count=False):
+    """Convert an already aggregated mapping to a compact count DataFrame."""
+    columns = list(key_columns) + ['Count']
+    if not counts:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame.from_records(
+        ((*key, count) for key, count in counts.items()),
+        columns=columns,
+    )
+    if min_count > 0:
+        df = df[df['Count'] >= min_count]
+    if sort_by_count:
+        df = df.sort_values('Count', ascending=False)
+    return df
+
+
+def clip_from_bam(bamfile, mapq = 20, nmmax = 1, n = 0,
+                  SA_with_nm = True, count_binsize = None):
     """
     get all clip positions from bam files
     -- count softclip and hardclip reads per chromosome coordinates
@@ -101,6 +151,8 @@ def clip_from_bam(bamfile, mapq = 20, nmmax = 1, n = 0,  SA_with_nm = True):
 
     input: bamfile
     output: pandas dataframe of split read counts in a dict
+    count_binsize: when provided, count accepted reads in genomic bins during
+        this same BAM pass and return the bin-count DataFrame as a third value
     nmmax: max number of mismatches
     mapq: minimal mapping quality
     readq: minimal read mean quality (readq = 20, not necessary)
@@ -108,8 +160,11 @@ def clip_from_bam(bamfile, mapq = 20, nmmax = 1, n = 0,  SA_with_nm = True):
 
     # with pysam.AlignmentFile(bamfile, "rb") as bamf:
 
-    left = list() # init left clip
-    right = list() # init right clip
+    # Aggregate while streaming. The previous implementation retained one
+    # Python tuple per clipped read and only grouped after the full BAM scan.
+    left = defaultdict(int)
+    right = defaultdict(int)
+    bin_counts = defaultdict(int) if count_binsize is not None else None
     reads_with_SA = {}  # init reads with SA
 
     # save downsampled reads for downstream breakpoint-pair analysis
@@ -126,31 +181,38 @@ def clip_from_bam(bamfile, mapq = 20, nmmax = 1, n = 0,  SA_with_nm = True):
             reads_with_SA = get_reads_with_SA(read, reads_with_SA, nmmax, SA_with_nm)
             if check_read(read, mapq = mapq, nmmax = nmmax):
 
+                if bin_counts is not None:
+                    pos = (read.reference_start // count_binsize) * count_binsize
+                    bin_counts[(read.reference_name, pos)] += 1
+
                 # left clip read
                 if (read.cigartuples[0][0] == 4): # soft clip reads
-                    left.append((read.reference_name, \
-                                    read.reference_start, "L"))
+                    left[(read.reference_name, read.reference_start, "L")] += 1
                 elif (read.cigartuples[0][0] == 5): # hard clip reads
-                    left.append((read.reference_name, \
-                                    read.reference_start, "L"))
+                    left[(read.reference_name, read.reference_start, "L")] += 1
 
                 # right clip reads
                 if (read.cigartuples[-1][0] == 4): # soft clip reads
-                    right.append((read.reference_name, \
-                                    read.reference_end-1, "R"))
+                    right[(read.reference_name, read.reference_end-1, "R")] += 1
                 elif (read.cigartuples[-1][0] == 5): # hard clip reads
-                    right.append((read.reference_name, \
-                                    read.reference_end-1, "R"))
+                    right[(read.reference_name, read.reference_end-1, "R")] += 1
     finally:
         if outfile is not None:
             outfile.close()
 
     # convert all clip read counts to df
-    left = list2df_count(left, n = n, f_sort = False)
-    right = list2df_count(right, n = n, f_sort = False)
+    left = _count_map_to_df(left, ['Chrom', 'Coord', 'Clip'], min_count=n)
+    right = _count_map_to_df(right, ['Chrom', 'Coord', 'Clip'], min_count=n)
 
     # return left and right clip points by chrom.position
-    return dict(left=left, right=right), reads_with_SA
+    bp_all = dict(left=left, right=right)
+    if bin_counts is None:
+        return bp_all, reads_with_SA
+
+    bin_count = _count_map_to_df(bin_counts, ['Chrom', 'Coord'])
+    bin_count['CN'] = 2 * bin_count['Count'] / np.mean(bin_count['Count'])
+    bin_count = bin_count.sort_values(['Chrom', 'Coord'])
+    return bp_all, reads_with_SA, bin_count
 
 #------------------------------------------------------------------------------#
 def list2df_count(lst, colnames=["Chrom", "Coord", "Clip"], n = 10, f_sort=True):
@@ -195,7 +257,6 @@ def clip2bedgraph(clip, n = 2):
                     right[['Chrom', 'Start', 'End', 'Count']]])
     return df.sort_values(['Chrom', 'Start', 'End'])
 
-# DFS  ################# ---------------------------------------
 
 #------------------------------------------------------------------------------#
 # apply heavy smoothing on sub bin counts to remove peaks in ATAC-seq
@@ -269,18 +330,19 @@ def region_count(bamfile, genomesizefile = None,
     """
     count reads in genome bins
     """
-    cnt = list()
+    # Keep one integer per occupied genomic bin instead of one Python list row
+    # per read. This changes memory from O(number of reads) to O(number of bins).
+    cnt = defaultdict(int)
 
     # with pysam.AlignmentFile(bamfile, "rb") as bamf:
     for read in bamfile.fetch():
         if check_read(read, mapq = mapq, nmmax = nmmax):
-            pos = math.floor(read.reference_start/binsize)*binsize
-            cnt.append([read.reference_name, pos])
+            pos = (read.reference_start // binsize) * binsize
+            cnt[(read.reference_name, pos)] += 1
 
     # convert all read counts to df
     colnames = ['Chrom', 'Coord']
-    df = pd.DataFrame(cnt, columns=colnames)
-    df = df.groupby(colnames).size().reset_index(name='Count')
+    df = _count_map_to_df(cnt, colnames)
     df['CN'] = 2*df['Count']/np.mean(df['Count'])
 
     if (sort_): 
@@ -480,24 +542,27 @@ class prebamfile():
             e = 1
         if e and e > chrLen[chrNum(c)]:
             e = chrLen[chrNum(c)] - 1
-        if self.downsample_ratio == 1:
-            if c and s and e: 
-                for a in self.bamfile.fetch(c, s, e ):
-                    yield a
-            else:
-                for a in self.bamfile.fetch():
-                    yield a
+        if c and s and e:
+            reads = self.bamfile.fetch(c, s, e)
         else:
-            if c and s and e:                     
-                for a in  self.bamfile.fetch(c, s, e):
-                    random.seed(a.query_name)
-                    if random.uniform(0, 1) < self.downsample_ratio:
-                        yield a
-            else:                
-                for a in  self.bamfile.fetch():
-                    random.seed(a.query_name)
-                    if random.uniform(0, 1) < self.downsample_ratio:
-                        yield a
+            reads = self.bamfile.fetch()
+
+        if self.downsample_ratio == 1:
+            yield from reads
+            return
+
+        # Stable read-pair downsampling without reseeding Python's PRNG for
+        # every alignment. CRC32 is implemented in C, is reproducible across
+        # processes, and gives every alignment sharing a QNAME the same
+        # decision (primary/supplementary and read1/read2 stay together).
+        # Comparing integers also avoids constructing a floating-point random
+        # number for every BAM record.
+        hash_space = 1 << 32
+        cutoff = int(min(1.0, max(0.0, self.downsample_ratio)) * hash_space)
+        for a in reads:
+            qname = a.query_name
+            if zlib.crc32(qname.encode('utf-8')) < cutoff:
+                yield a
                 
     # bamfile.count_coverage(contig, start, stop)
 
@@ -654,3 +719,97 @@ class prebamfile():
 
         else:
             self.downsample_stats = self.basic_stats
+
+
+def cluster_discordant_edges_multi(bam, regions,
+                                    max_insert=900, read_length=100,
+                                    pair_support=3, mapq_cut=5):
+    """
+    Discordant-read support from all regions is collected into a shared set of
+    buckets and then sorted and clustered together. This avoids clustering each
+    region independently and concatenating the results, which could split the same
+    junction spanning two segments into separate edges with insufficient support.
+    """
+    bin_w = max_insert - read_length
+
+    def is_discordant(a):
+        if (a.is_unmapped or not a.is_paired
+                or a.is_proper_pair or a.mate_is_unmapped
+                or a.is_supplementary or a.is_secondary or a.is_duplicate
+                or a.mapping_quality <= mapq_cut):
+            return False
+        if (a.reference_name == a.next_reference_name
+                and a.is_reverse != a.mate_is_reverse
+                and abs(a.reference_start - a.next_reference_start) < max_insert):
+            return False
+        return True
+
+    def get_read_barcode(a):
+        for tag in ('CB', 'CR', 'BX', 'BC'):
+            if a.has_tag(tag):
+                return a.get_tag(tag)
+        return None
+
+    buckets = defaultdict(list)
+    seen = set()
+    for chrom, start, end in regions:
+        for a in bam.fetch(chrom, max(0, start), end):
+            if not is_discordant(a):
+                continue
+            # READID: keep a compact stable integer in the WGS-wide seen set.
+            read_id = int(qname_to_read_id(a.query_name))
+            rid = (read_id, a.reference_id, a.reference_start)
+            if rid in seen:
+                continue
+            seen.add(rid)
+
+            self_pos = a.reference_end - 1 if not a.is_reverse else a.reference_start
+            self_str = '+' if not a.is_reverse else '-'
+            mate_str = '+' if not a.mate_is_reverse else '-'
+            endA = (a.reference_name, self_str, self_pos)
+            endB = (a.next_reference_name, mate_str, a.next_reference_start)
+            if (endA[0], endA[1]) <= (endB[0], endB[1]):
+                key = (endA[0], endA[1], endB[0], endB[1])
+                point = (endA[2], endB[2], read_id, get_read_barcode(a))
+            else:
+                key = (endB[0], endB[1], endA[0], endA[1])
+                point = (endB[2], endA[2], read_id, get_read_barcode(a))
+
+            # Keep every supporting alignment occurrence, including repeated QNAMEs.
+            buckets[key].append(point)
+
+    edges = []
+
+    def append_cluster(chrA, strA, chrB, strB, cluster):
+        # READID: retain one compact ID per supporting alignment occurrence.
+        read_ids = np.asarray([row[2] for row in cluster], dtype=np.uint64)
+        if read_ids.size < pair_support:
+            return
+
+        readbarcodes = [row[3] for row in cluster]
+        a_pos = max(row[0] for row in cluster) if strA == '+' else min(row[0] for row in cluster)
+        b_pos = max(row[1] for row in cluster) if strB == '+' else min(row[1] for row in cluster)
+
+        # BARCODE: omit the optional fifth edge field when every barcode is absent.
+        edge = ((chrA, a_pos, strA), (chrB, b_pos, strB), int(read_ids.size), read_ids)
+        if any(barcode is not None for barcode in readbarcodes):
+            edge += (readbarcodes,)
+        edges.append(edge)
+
+    for (chrA, strA, chrB, strB), points_raw in buckets.items():
+        points = sorted(points_raw, key=lambda row: row[0])
+        if not points:
+            continue
+
+        cluster = [points[0]]
+        for point in points[1:]:
+            if point[0] - cluster[-1][0] < bin_w:
+                cluster.append(point)
+                continue
+            append_cluster(chrA, strA, chrB, strB, cluster)
+            cluster = [point]
+
+        append_cluster(chrA, strA, chrB, strB, cluster)
+
+    edges.sort(key=lambda e: -e[2])
+    return edges

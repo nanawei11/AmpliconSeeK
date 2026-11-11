@@ -128,8 +128,6 @@ def run_ask_from_bam(
         "--knn",
         "3",
         "--subseg",
-        "--method",
-        "both",
         "--juncread",
         "5",
         "--SA_with_nm"
